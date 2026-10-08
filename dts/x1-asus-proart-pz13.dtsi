@@ -30,7 +30,7 @@
 	gpio-keys {
 		compatible = "gpio-keys";
 
-		pinctrl-0 = <&hall_int_n_default>;
+		pinctrl-0 = <&hall_int_n_default>, <&vol_up_n_default>, <&vol_down_n_default>;
 		pinctrl-names = "default";
 
 		switch-lid {
@@ -40,6 +40,30 @@
 			linux,code = <SW_LID>;
 			wakeup-source;
 			wakeup-event-action = <EV_ACT_DEASSERTED>;
+		};
+
+		/*
+		 * ACPI \_SB.BTNS (ACPI0011): Volume Increment / Decrement on
+		 * PMIC GPIO pins 0xd5 / 0xd7 of \_SB.PM01; pm8550 GPIO 6 and 8
+		 * are the two lines the firmware leaves as inputs, as on the
+		 * CRD (volume up on GPIO 6).
+		 */
+		key-vol-up {
+			label = "volume_up";
+			gpios = <&pm8550_gpios 6 GPIO_ACTIVE_LOW>;
+			linux,code = <KEY_VOLUMEUP>;
+			debounce-interval = <15>;
+			linux,can-disable;
+			wakeup-source;
+		};
+
+		key-vol-down {
+			label = "volume_down";
+			gpios = <&pm8550_gpios 8 GPIO_ACTIVE_LOW>;
+			linux,code = <KEY_VOLUMEDOWN>;
+			debounce-interval = <15>;
+			linux,can-disable;
+			wakeup-source;
 		};
 	};
 
@@ -1389,6 +1413,22 @@
 };
 
 &pm8550_gpios {
+	vol_up_n_default: vol-up-n-state {
+		pins = "gpio6";
+		function = "normal";
+		power-source = <1>;
+		bias-pull-up;
+		input-enable;
+	};
+
+	vol_down_n_default: vol-down-n-state {
+		pins = "gpio8";
+		function = "normal";
+		power-source = <1>;
+		bias-pull-up;
+		input-enable;
+	};
+
 	rtmr0_default: rtmr0-reset-n-active-state {
 		pins = "gpio10";
 		function = "normal";
