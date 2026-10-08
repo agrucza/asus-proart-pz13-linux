@@ -1,0 +1,7 @@
+{
+  "uuid": "pz13-sleep-lock@asus-proart-pz13",
+  "name": "PZ13 sleep lock",
+  "description": "Lock the screen without animation when the system is about to suspend. With mutter 48 the frame clock does not advance while the display is off, so the animated lock never completes before the suspend.",
+  "shell-version": ["48"],
+  "version": 1
+}

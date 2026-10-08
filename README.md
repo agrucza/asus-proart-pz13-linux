@@ -13,7 +13,7 @@ Windows ACPI dump (DSDT). Kernel: `jg/ubuntu-qcom-x1e-7.2.y` from
 | `dts/x1p42100-asus-proart-pz13.dts` | Board file: model, firmware paths, GPU, WLAN PMU, panel |
 | `dts/x1-asus-proart-pz13.dtsi` | Regulators (incl. PM8010 camera rails), USB, PCIe, I2C devices, pinctrl, display, audio, front and IR camera |
 | `ucm2/Qualcomm/x1e80100/` | UCM profile (alsa-ucm-conf) for the sound card: two `.conf` files plus `x1e80100.conf.patch` for the DMI dispatcher |
-| `install/` | systemd-boot entry, initramfs hook, keyboard backlight script, Fn-key daemon + unit, WirePlumber override that enables the libcamera monitor, libcamera tuning file for the OV5675, sleep hook that re-initialises the cover after resume |
+| `install/` | systemd-boot entry, initramfs hook, keyboard backlight script, Fn-key daemon + unit, gnome-shell extension for locking on suspend, WirePlumber override that enables the libcamera monitor, libcamera tuning file for the OV5675, sleep hook that re-initialises the cover after resume |
 | `notes/cameras.md` | Camera sensors and their wiring, decoded from the Windows driver package |
 | `tools/` | `aeob-parse.py` (decoder for the Windows camera resource binaries), `pz13-dpdiag.sh` (USB-C/DisplayPort alt-mode state dump) |
 | `patches/` | Kernel patches on top of jglathe's `jg/ubuntu-qcom-x1e-7.2.y`: the HM1092 sensor driver + binding (v6 from linux-media), CSIPHY combo-mode support in camss/phy-qcom-mipi-csi2 (ours, needed for the IR camera), and X1P42100 CAMSS support (Wenmeng Liu v3 from linux-media, needed because Purwa has no IFE1: with the X1E description every suspend/resume toggled a non-existent power domain) |
@@ -199,6 +199,27 @@ capture of the vendor feature reports:
 - Waking with the power button sometimes needs several presses: the journal shows a single
   `PM: suspend exit` per cycle 12–21 s after entry, i.e. the first presses do not register as
   wake events although the PMIC power key has wakeup enabled. Not investigated.
+- Lock screen and suspend (GNOME 48): without `install/pz13-sleep-lock@asus-proart-pz13`,
+  suspend starts only 5 s after the request and after resume the screen goes dark again
+  about 1.3 s after it came on, until touched. Cause (gnome-settings-daemon debug logs,
+  mutter and gnome-shell sources): on "about to suspend", gnome-settings-daemon switches
+  the display off immediately while gnome-shell is still animating the lock screen; with
+  the display off, mutter 48's frame clock does not advance on this device (a pending
+  frame is only completed when a newer frame supersedes it, and a second frame is only
+  dispatched when rendering is slow), so the lock never completes (verified without
+  suspend: display off via `PowerSaveMode`, then `org.gnome.ScreenSaver.SetActive true`
+  never reports active until the display is on again). gnome-shell therefore keeps its
+  delay inhibitor until logind's 5 s timeout, and the lock completes after resume and
+  blanks the screen. The kernel side is clean (`drm_vblank_event_*` tracepoints show both
+  commits completing). The extension makes the lock non-animated when the login manager
+  reports "preparing for sleep", so the shield becomes active synchronously before the
+  display goes off: suspend starts 0.2 s after the request and the lock screen stays on
+  after the wake. The mutter stall itself remains (anything that has to animate while the
+  display is off). Install: copy the directory to
+  `~/.local/share/gnome-shell/extensions/`, log out and in, then
+  `gnome-extensions enable pz13-sleep-lock@asus-proart-pz13`. A sleep hook must not sleep
+  in the foreground: logind reports the resume to the desktop only after all hooks
+  returned (`install/pz13-cover-usb-resume` defers its wait into a transient unit).
 - Cover after the keyboard's firmware reset: `install/pz13-cover-usb-resume` to
   `/usr/lib/systemd/system-sleep/` (mode 755); it sends the backlight feature report after
   every resume, without which the cover emits no Fn-layer reports after its reset.

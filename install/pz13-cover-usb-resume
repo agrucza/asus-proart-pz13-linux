@@ -1,9 +1,9 @@
 #!/bin/sh
-# systemd-sleep hook (/usr/lib/systemd/system-sleep/): after resume, send the keyboard
-# cover its backlight feature report. A key held during suspend triggers the keyboard's
-# firmware reset, which wipes the cover's state while the kernel reset-resumes it as the
-# same device; the cover only sends its Fn-layer reports after that report.
+# systemd-sleep hook (/usr/lib/systemd/system-sleep/): after resume, re-send the
+# keyboard cover's backlight feature report once the cover has re-enumerated.
+# The wait runs in a transient unit so that this hook returns at once: logind
+# only reports the resume to the desktop after all sleep hooks have finished.
 [ "$1" = "post" ] || exit 0
-sleep 3
-/usr/local/bin/kbdlight "$(cat /run/pz13-kbdlight.level 2>/dev/null || echo 1)" 2>/dev/null
+systemd-run --quiet --no-block --collect sh -c \
+  'sleep 3; /usr/local/bin/kbdlight "$(cat /run/pz13-kbdlight.level 2>/dev/null || echo 1)"'
 exit 0
