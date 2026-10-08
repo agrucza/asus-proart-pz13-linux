@@ -1,0 +1,13 @@
+#!/bin/sh
+# initramfs-tools hook: $1 = kernel version, $2 = path of the new initrd.
+# Copies kernel, initrd and DTB to where systemd-boot expects them per
+# /boot/efi/loader/entries/pz13.conf. The DTB in /boot/dtb/ is the one we
+# maintain (copied there by hand after each DTB build); the kernel package's
+# copy is only used to seed /boot/dtb/ when it is empty, never to overwrite it.
+set -e
+DTB=/boot/dtb/x1p42100-asus-proart-pz13.dtb
+PKGDTB=/usr/lib/linux-image-"$1"/qcom/x1p42100-asus-proart-pz13.dtb
+[ -f "$DTB" ] || { [ -f "$PKGDTB" ] && cp "$PKGDTB" "$DTB"; }
+cp /boot/vmlinuz-"$1" /boot/efi/pz13/vmlinuz-"$1"
+cp "$2" /boot/efi/pz13/initrd.img-"$1"
+cp "$DTB" /boot/efi/pz13/

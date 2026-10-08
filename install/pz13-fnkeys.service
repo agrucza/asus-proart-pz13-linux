@@ -1,0 +1,10 @@
+[Unit]
+Description=ASUS ProArt PZ13 keyboard cover Fn keys (hidraw -> uinput)
+
+[Service]
+ExecStart=/usr/local/bin/pz13-fnkeys
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

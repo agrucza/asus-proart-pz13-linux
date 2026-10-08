@@ -1,0 +1,176 @@
+// SPDX-License-Identifier: BSD-3-Clause
+/*
+ * Copyright (c) 2025 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) 2026 Alex Grucza
+ *
+ * ASUS ProArt PZ13 (HT5306QA) - Snapdragon X Plus X1P-42-100 ("Purwa")
+ *
+ * Derived from the ASUS Zenbook A14 (UX3407QA) device tree plus the PZ13's
+ * Windows ACPI DSDT. Boots to a full desktop (display, GPU, NVMe, WLAN, BT,
+ * touch, pen, keyboard cover, battery, suspend); audio and cameras are not
+ * done yet. Remaining open points carry a PZ13-TODO marker.
+ */
+
+/dts-v1/;
+
+#include "purwa.dtsi"
+#include "x1-asus-proart-pz13.dtsi"
+
+/delete-node/ &pmc8380_6;
+/delete-node/ &pmc8380_6_thermal;
+
+/ {
+	model = "ASUS ProArt PZ13 (HT5306QA)";
+	compatible = "asus,proart-pz13-ht5306qa", "qcom,x1p42100";
+
+	/*
+	 * Windows Device Manager: "Qualcomm FastConnect 7800" = WCN7850 (Wi-Fi 7),
+	 * firmware wlanfw20.mbn + bdwlan_wcn785x_*. Regulator naming follows the
+	 * upstream Dell XPS 13 9345 (x1e80100-dell-xps13-9345.dts). The enable
+	 * GPIOs tlmm 116/117 and the vreg_wcn_* fixed regulators are inherited
+	 * from the Zenbook A14; WLAN and Bluetooth come up with them.
+	 * PZ13-TODO: the DSDT also votes CLK7_A (RPMH_LN_BB_CLK2) for pcie4,
+	 * the WCN7850 reference clock; not described here yet.
+	 */
+	wcn7850-pmu {
+		compatible = "qcom,wcn7850-pmu";
+
+		vdd-supply = <&vreg_wcn_0p95>;
+		vddio-supply = <&vreg_l15b_1p8>;
+		vddaon-supply = <&vreg_wcn_0p95>;
+		vdddig-supply = <&vreg_wcn_0p95>;
+		vddrfa1p2-supply = <&vreg_wcn_1p9>;
+		vddrfa1p8-supply = <&vreg_wcn_1p9>;
+
+		wlan-enable-gpios = <&tlmm 117 GPIO_ACTIVE_HIGH>;
+		bt-enable-gpios = <&tlmm 116 GPIO_ACTIVE_HIGH>;
+
+		pinctrl-0 = <&wcn_bt_en>, <&wcn_wlan_en>;
+		pinctrl-names = "default";
+
+		regulators {
+			vreg_pmu_rfa_cmn: ldo0 {
+				regulator-name = "vreg_pmu_rfa_cmn";
+			};
+
+			vreg_pmu_aon_0p59: ldo1 {
+				regulator-name = "vreg_pmu_aon_0p59";
+			};
+
+			vreg_pmu_wlcx_0p8: ldo2 {
+				regulator-name = "vreg_pmu_wlcx_0p8";
+			};
+
+			vreg_pmu_wlmx_0p85: ldo3 {
+				regulator-name = "vreg_pmu_wlmx_0p85";
+			};
+
+			vreg_pmu_btcmx_0p85: ldo4 {
+				regulator-name = "vreg_pmu_btcmx_0p85";
+			};
+
+			vreg_pmu_rfa_0p8: ldo5 {
+				regulator-name = "vreg_pmu_rfa_0p8";
+			};
+
+			vreg_pmu_rfa_1p2: ldo6 {
+				regulator-name = "vreg_pmu_rfa_1p2";
+			};
+
+			vreg_pmu_rfa_1p8: ldo7 {
+				regulator-name = "vreg_pmu_rfa_1p8";
+			};
+
+			vreg_pmu_pcie_0p9: ldo8 {
+				regulator-name = "vreg_pmu_pcie_0p9";
+			};
+
+			vreg_pmu_pcie_1p8: ldo9 {
+				regulator-name = "vreg_pmu_pcie_1p8";
+			};
+		};
+	};
+};
+
+&gpu {
+	status = "okay";
+};
+
+/* Windows DriverStore name: qcdxkmsucpurwa.mbn */
+&gpu_zap_shader {
+	firmware-name = "qcom/x1p42100/ASUSTeK/proart-pz13/qcdxkmsucpurwa.mbn";
+};
+
+/*
+ * Panel: EDID manufacturer SDC (Samsung Display), product 0x41B0,
+ * 2880x1800 OLED, DisplayPort/eDP, 10 bpc. The generic Samsung ATNA eDP
+ * OLED driver matches on EDID; the Zenbook A14 uses the same driver with
+ * its own panel id. Enable GPIO pmc8380_3 gpio 4 as on the Zenbook A14;
+ * verified working (panel comes up through the driver, backlight via AUX).
+ */
+&panel {
+	compatible = "samsung,atna33xc20";
+	enable-gpios = <&pmc8380_3_gpios 4 GPIO_ACTIVE_HIGH>;
+
+	pinctrl-0 = <&edp_bl_en>;
+	pinctrl-names = "default";
+};
+
+&pcie4_port0 {
+	wifi@0 {
+		compatible = "pci17cb,1107";
+		reg = <0x10000 0x0 0x0 0x0 0x0>;
+
+		vddaon-supply = <&vreg_pmu_aon_0p59>;
+		vddwlcx-supply = <&vreg_pmu_wlcx_0p8>;
+		vddwlmx-supply = <&vreg_pmu_wlmx_0p85>;
+		vddrfacmn-supply = <&vreg_pmu_rfa_cmn>;
+		vddrfa0p8-supply = <&vreg_pmu_rfa_0p8>;
+		vddrfa1p2-supply = <&vreg_pmu_rfa_1p2>;
+		vddrfa1p8-supply = <&vreg_pmu_rfa_1p8>;
+		vddpcie0p9-supply = <&vreg_pmu_pcie_0p9>;
+		vddpcie1p8-supply = <&vreg_pmu_pcie_1p8>;
+
+		/*
+		 * No board-2.bin entry exists for this variant yet; ath12k falls
+		 * back to the generic WCN7850 board data, which works. PZ13-TODO:
+		 * extract the ASUS board file from the Windows bdwlan.elf and get
+		 * it into linux-firmware.
+		 */
+		qcom,calibration-variant = "HT5306QA";
+	};
+};
+
+/* Windows DriverStore names: qcadsp8380.mbn + adsp_dtbs.elf */
+&remoteproc_adsp {
+	firmware-name = "qcom/x1p42100/ASUSTeK/proart-pz13/qcadsp8380.mbn",
+			"qcom/x1p42100/ASUSTeK/proart-pz13/adsp_dtbs.elf";
+
+	status = "okay";
+};
+
+/* Windows DriverStore names: qccdsp8380.mbn + cdsp_dtbs.elf */
+&remoteproc_cdsp {
+	firmware-name = "qcom/x1p42100/ASUSTeK/proart-pz13/qccdsp8380.mbn",
+			"qcom/x1p42100/ASUSTeK/proart-pz13/cdsp_dtbs.elf";
+
+	status = "okay";
+};
+
+/* Debug UART: ACPI DBG2/SPCR \_SB.UARD @ 0x00894000 = uart21 (console=ttyMSM0,115200) */
+&uart14 {
+	status = "okay";
+
+	bluetooth {
+		compatible = "qcom,wcn7850-bt";
+		max-speed = <3200000>;
+
+		vddaon-supply = <&vreg_pmu_aon_0p59>;
+		vddwlcx-supply = <&vreg_pmu_wlcx_0p8>;
+		vddwlmx-supply = <&vreg_pmu_wlmx_0p85>;
+		vddrfacmn-supply = <&vreg_pmu_rfa_cmn>;
+		vddrfa0p8-supply = <&vreg_pmu_rfa_0p8>;
+		vddrfa1p2-supply = <&vreg_pmu_rfa_1p2>;
+		vddrfa1p8-supply = <&vreg_pmu_rfa_1p8>;
+	};
+};
