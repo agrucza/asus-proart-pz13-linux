@@ -16,7 +16,7 @@ Windows ACPI dump (DSDT). Kernel: `jg/ubuntu-qcom-x1e-7.2.y` from
 | `install/` | systemd-boot entry, initramfs hook, keyboard backlight script, Fn-key daemon + unit, gnome-shell extension for locking on suspend, WirePlumber override that enables the libcamera monitor, libcamera tuning files for the OV5675 and OV13858, sleep hook that re-initialises the cover after resume |
 | `notes/cameras.md` | Camera sensors and their wiring, decoded from the Windows driver package |
 | `tools/` | `aeob-parse.py` (decoder for the Windows camera resource binaries), `pz13-dpdiag.sh` (USB-C/DisplayPort alt-mode state dump) |
-| `patches/` | Kernel patches on top of jglathe's `jg/ubuntu-qcom-x1e-7.2.y`: the HM1092 sensor driver + binding (v6 from linux-media), CSIPHY combo-mode support in camss/phy-qcom-mipi-csi2 (ours, needed for the IR camera), X1P42100 CAMSS support (Wenmeng Liu v3 from linux-media, needed because Purwa has no IFE1: with the X1E description every suspend/resume toggled a non-existent power domain), device-tree support for the OV13858 rear-camera driver (ours: supplies, reset line, OF match, binding), the PZ13 entry in the SCM driver's QSEECOM allow-list (ours; RTC and UEFI variables), and a HID battery quirk for the ELAN touch controller's bogus stylus battery (ours) |
+| `patches/` | Kernel patches on top of jglathe's `jg/ubuntu-qcom-x1e-7.2.y`: the HM1092 sensor driver + binding (v6 from linux-media), CSIPHY combo-mode support in camss/phy-qcom-mipi-csi2 (ours, needed for the IR camera), X1P42100 CAMSS support (Wenmeng Liu v3 from linux-media, needed because Purwa has no IFE1: with the X1E description every suspend/resume toggled a non-existent power domain), device-tree support for the OV13858 rear-camera driver (ours: supplies, reset line, OF match, binding), the PZ13 entry in the SCM driver's QSEECOM allow-list (ours; RTC and UEFI variables), and a HID battery quirk for the ELAN touch controller's bogus stylus battery (ours), and the panel's entry in the samsung,atna33xc20 binding (ours) |
 
 Kernel integration: copy both DTS files to `arch/arm64/boot/dts/qcom/`, add
 `dtb-$(CONFIG_ARCH_QCOM) += x1p42100-asus-proart-pz13.dtb` to the `Makefile`, and the
@@ -34,7 +34,7 @@ appear identically on `x1e80100-crd.dtb`.
 | Area | Status |
 |------|--------|
 | Boot, SCM, SMMU, SPMI/PMICs, RPMh regulators | works |
-| Display (msm/DPU, eDP, native 2880×1800) | works; brightness via `dp_aux_backlight` (adjustable in GNOME) |
+| Display (msm/DPU, eDP, Samsung ATNA33AA08-0 OLED, native 2880×1800) | works with the `samsung,atna33xc20` panel driver and the PMIC enable line (`patches/0009` adds the panel to the binding); brightness via `dp_aux_backlight` (adjustable in GNOME) |
 | GPU (Adreno X1-45) | hardware accelerated with Mesa ≥ 25.2 (trixie-backports 26.1); firmware `gen71500_sqe.fw`/`gen71500_gmu.bin` from linux-firmware git (trixie's package is too old); the ZAP shader must be the ASUS-signed `qcdxkmsucpurwa.mbn` from the Windows driver, the generic `qcom/x1p42100/gen71500_zap.mbn` is rejected by TrustZone (`error -22`, GPU stays off, Mesa falls back to llvmpipe; tested 2026-10-06) |
 | NVMe (pcie6a) | works |
 | WLAN WCN7850 (pcie4, ath12k) | works (NetworkManager); ath12k uses the generic board file, the ASUS variant is missing from linux-firmware |
@@ -245,6 +245,16 @@ capture of the vendor feature reports:
   (no seat ACL on it). That is harmless, libcamera's software ISP then uses plain memory.
   Do **not** make the heaps accessible: with access, libcamera allocates from the 128 MB
   CMA pool and 1080p streams fail with "error set output format: -22". The OV5675 is the one whose object path ends in `camera@36`.
+- Display colour profile: ASUS ships a per-unit factory calibration of the OLED on the
+  Windows partition, `ProgramData/ASUS/ASUS System Control Interface/AsusOptimization/Splendid/HT5306QA_QCOM_834C41B0.icm`
+  (ICC v2, measured primaries, white point and per-channel tone curves, no VCGT; the
+  `_CMDEF` variant and the `PQConfig*.dv` files add Microsoft HDR and Dolby Vision blocks
+  that Linux does not use). Mount the Windows partition read-only, copy the file somewhere outside
+  `~/.local/share/icc` (the import copies it there itself and refuses an existing copy), then
+  `colormgr import-profile <file>`, `colormgr device-add-profile <display> <profile>` and
+  `colormgr device-make-profile-default <display> <profile>` (device and profile paths from
+  `colormgr get-devices` / `colormgr find-profile-by-filename`); GNOME's Colour settings then
+  show it as the display's profile. The profile is not redistributed here.
 - Camera colour: libcamera 0.4 (trixie) has no colour matrix in its software ISP, the
   picture stays greenish. Install libcamera and PipeWire from trixie-backports (0.7.1 /
   1.6.9: `apt install -t trixie-backports libcamera-tools libcamera-ipa
@@ -286,11 +296,13 @@ capture of the vendor feature reports:
    off, see "What works") is worked around by the gnome-shell extension and should be
    reported upstream with the evidence. No alarm wake: the PMIC RTC's alarm is owned by
    the ADSP (`qcom,no-alarm`).
-9. **Panel**: the Samsung ATNA33AA08-0 OLED (EDID SDC 0x41b0) is unknown to panel-edp,
-   which uses conservative timings (2 s before the panel may be powered on again after a
-   power-off). The sibling ASUS boards describe their Samsung OLEDs with the dedicated
-   `samsung,atna33xc20` driver and the PMIC enable line (`edp_bl_en`, defined but unused
-   here); switching needs a controlled test since it drives that line.
+9. **Panel**: described with the dedicated `samsung,atna33xc20` driver and the PMIC enable
+   line like the sibling ASUS boards (`patches/0009` adds `samsung,atna33aa08` to the
+   binding). Measured with the DisplayPort driver's debug log, a power-save off/on cycle
+   brings the link up 0.24 s after the request with either description: the DP driver keeps
+   the panel powered across power-save, so the generic driver's conservative timings were
+   never hit here. Adopted for correctness, not speed. The factory colour profile is on the Windows
+   partition (see Installation).
 
 ## Upstream references (linux-arm-msm)
 

@@ -1442,9 +1442,19 @@
 	status = "okay";
 
 	aux-bus {
+		/*
+		 * Samsung ATNA33AA08-0 OLED (EDID SDC 0x41b0). Dedicated driver
+		 * with the panel's enable line, as on the Zenbook A14 and the
+		 * Vivobook S15; the generic edp-panel driver does not know this
+		 * panel and uses conservative timings (2 s before a power-on).
+		 */
 		panel: panel {
-			compatible = "edp-panel";
+			compatible = "samsung,atna33aa08", "samsung,atna33xc20";
+			enable-gpios = <&pmc8380_3_gpios 4 GPIO_ACTIVE_HIGH>;
 			power-supply = <&vreg_edp_3p3>;
+
+			pinctrl-0 = <&edp_bl_en>;
+			pinctrl-names = "default";
 
 			port {
 				edp_panel_in: endpoint {
@@ -1578,7 +1588,9 @@
 	edp_bl_en: edp-bl-en-state {
 		pins = "gpio4";
 		function = "normal";
-		power-source = <1>;
+		power-source = <1>; /* 1.8 V */
+		qcom,drive-strength = <PMIC_GPIO_STRENGTH_MED>;
+		bias-pull-down;
 		input-disable;
 		output-enable;
 	};
