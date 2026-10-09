@@ -1,0 +1,31 @@
+From 66b0a1ea40b89b098f58fa1dded68a6efc3d1c75 Mon Sep 17 00:00:00 2001
+From: Alex Grucza <alex.grucza@googlemail.com>
+Date: Fri, 9 Oct 2026 15:46:17 +0200
+Subject: [PATCH] dt-bindings: display: panel: samsung,atna33xc20: add
+ ATNA33AA08
+
+Add the Samsung ATNA33AA08-0, the 13.3" 3K eDP AMOLED panel of the ASUS
+ProArt PZ13 (EDID vendor SDC, product 0x41b0). It is handled by the
+atna33xc20 driver like the other panels of this family.
+
+Signed-off-by: Alex Grucza <alex.grucza@googlemail.com>
+---
+ .../devicetree/bindings/display/panel/samsung,atna33xc20.yaml   | 2 ++
+ 1 file changed, 2 insertions(+)
+
+diff --git a/Documentation/devicetree/bindings/display/panel/samsung,atna33xc20.yaml b/Documentation/devicetree/bindings/display/panel/samsung,atna33xc20.yaml
+index 518cd04f7..6f5717de3 100644
+--- a/Documentation/devicetree/bindings/display/panel/samsung,atna33xc20.yaml
++++ b/Documentation/devicetree/bindings/display/panel/samsung,atna33xc20.yaml
+@@ -21,6 +21,8 @@ properties:
+           - enum:
+               # Samsung 13" 3K (2880×1920 pixels) eDP AMOLED panel
+               - samsung,atna30dw01
++              # Samsung 13.3" 3K (2880x1800 pixels) eDP AMOLED panel
++              - samsung,atna33aa08
+               # Samsung 14" WUXGA (1920×1200 pixels) eDP AMOLED panel
+               - samsung,atna40ct01
+               # Samsung 14" FHD+ (1920x1200 pixels) eDP AMOLED panel
+-- 
+2.47.3
+
