@@ -1,0 +1,42 @@
+# SPDX-License-Identifier: CC0-1.0
+#
+# libcamera software-ISP tuning for the OV13858 rear camera of the ASUS ProArt PZ13.
+# Install as /usr/share/libcamera/ipa/simple/ov13858.yaml (libcamera >= 0.7).
+#
+# The colour correction matrices are the CC13 "region" tables that Qualcomm's own
+# tuning for this module (com.qti.tuned.ov13858.bin in the Windows camera package)
+# applies for the colour-temperature regions 2300-2600, 2750-3300, 3700-4300,
+# 4700-5300 and 6200-6800 K (lowest gain region). Black level: OmniVision BLC target
+# 64/1023, i.e. 4096 on libcamera's 16-bit scale.
+%YAML 1.1
+---
+version: 1
+algorithms:
+  - BlackLevel:
+      blackLevel: 4096
+  - Awb:
+  - Ccm:
+      ccms:
+        - ct: 2450
+          ccm: [  1.478, -0.670,  0.193,
+                 -0.197,  1.417, -0.220,
+                 -0.173, -0.853,  2.027 ]
+        - ct: 3000
+          ccm: [  1.534, -0.732,  0.197,
+                 -0.330,  1.281,  0.049,
+                 -0.399, -1.069,  2.468 ]
+        - ct: 4000
+          ccm: [  2.102, -1.431,  0.329,
+                 -0.302,  1.639, -0.338,
+                 -0.185, -1.215,  2.400 ]
+        - ct: 5000
+          ccm: [  2.451, -1.707,  0.256,
+                 -0.319,  1.806, -0.487,
+                 -0.137, -0.984,  2.122 ]
+        - ct: 6500
+          ccm: [  2.277, -1.279,  0.001,
+                 -0.292,  1.853, -0.562,
+                 -0.111, -1.052,  2.163 ]
+  - Adjust:
+  - Agc:
+...

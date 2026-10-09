@@ -1,9 +1,9 @@
 # Cameras on the ProArt PZ13 – what the Windows driver package says
 
-The front OV5675 and the IR HM1092 **work** (front in GNOME Snapshot with colour, IR as a
-raw 560×360 mono stream); the rear OV13858 is not started. The wiring below is decoded from
-the Windows DriverStore dump (`qccam*8380` packages) and the DSDT; the front and IR sections
-are confirmed on the tablet, the rear section is derived only.
+All three cameras **work**: the front OV5675 (GNOME Snapshot with colour), the IR HM1092
+(raw 560×360 mono stream) and the rear OV13858 (640×480 processed stream via libcamera).
+The wiring below is decoded from the Windows DriverStore dump (`qccam*8380` packages) and
+the DSDT and confirmed on the tablet.
 
 Front camera: regulators accepted by RPMh, `ov5675 N-0036` (the CCI bus
 number varies per boot) linked to `msm_csiphy4` (2592×1944 SGRBG10), libcamera lists
@@ -109,20 +109,40 @@ TLMM 109 out low (reset)
 LDO7_B 2.8 V (AVDD); 1 ms; LDO6_M 1.8 V; LDO2_M 1.2 V (DVDD); LDO4_M 1.8 V (DOVDD);
 LDO5_M 2.8 V (VCM); LDO5_B 3.0 V; MCLK0 = 24 MHz; 5 ms; TLMM 109 high; 1 ms
 ```
-→ cci bus not listed (cci0_i2c0 on 101/102 is the only remaining pair), `camera@10`
-`ovti,ov13858`, 4 lanes, MCLK0 (tlmm 96) 19.2 MHz for the Linux driver, reset tlmm 109,
-csiphy0 most likely (4-lane PHY); VCM `dongwoon,dw9714` @0x0c and EEPROM `atmel,24c64`
-@0x50 on the same bus. The mainline `ov13858` driver takes no regulators, so the rails
-would have to be `regulator-always-on` or added to the driver.
+→ The sequence names no CCI pins; the platform file configures cci0_i2c0 (101/102) and
+cci1_i2c0 (105/106), and an I2C scan with the sensor powered found the module's VCM
+(0x0c) on cci0_i2c0. The sensor's address is in `com.qti.sensormodule.ov13858.bin`
+(`sensorDriverData` blob: slave 0x6c 8-bit = **0x36**, 16-bit register addresses, chip-ID
+register 0x300b = 0xd855), not the driver's default 0x10; the actuator blob says 0x18 (=
+0x0c) and the EEPROM blob 0xa0 (= 0x50). Node: `camera@36` `ovti,ov13858` on `cci0_i2c0`,
+4 lanes on csiphy0, MCLK0 (tlmm 96, `cam_mclk`) at 19.2 MHz for the Linux driver, reset
+tlmm 109. The mainline `ov13858` driver is ACPI-only; `patches/0006` adds supplies, reset,
+OF match and runtime-PM power sequencing. Rails by elimination: AVDD LDO7_B, DVDD LDO2_M,
+DOVDD LDO6_M, and the sensor only answers while LDO4_M (the IR camera's I/O rail, same CCI
+controller) is on as well (LDO5_B and LDO5_M are not needed for the sensor; LDO5_M powers
+the VCM). VCM `dongwoon,dw9714` @0x0c (vcc = LDO5_M) and EEPROM `atmel,24c64` @0x50 (vcc = LDO6_M,
+read-only; content `01 18 03 26` then 0xff) probe; the sensor's `lens-focus` yields the
+ancillary link (visible via MEDIA_IOC_G_TOPOLOGY, not in `media-ctl -p`). Focus moves:
+Laplacian-variance sharpness 100 at `focus_absolute=0` vs 25 at 1000 on the same scene.
+Tuning: `com.qti.tuned.ov13858.bin` has the CC13 block at the same place as the front
+file (five 24-byte CCT triggers 2300–2600 … 6200–6800 K at 0x9d602, then five 48-byte
+regions); `install/libcamera-ov13858.yaml` carries those matrices.
+Also in both tuning files, right after the CC13 block: the gamma15 tone curves (six
+257-entry float tables 0→1023 per file, three channels × two regions, at 0x9da92 front /
+0x9db12 rear). Front and rear use identical curves; region 0 fits a plain power law with
+exponent 0.43 (rms 0.04), region 1 0.54. libcamera 0.7.1's software ISP takes the gamma
+only as a runtime control (`Gamma`, default 0.5 in its `Adjust` algorithm), not from the
+tuning file, so this is recorded here but not applied. The bls12 black-level record could
+not be identified by value; the tuning files use the OmniVision default (64/1023).
 
 ## Rails
 
 The sequences vote on PM8010 ("M") LDOs 1–7 and on PM8550 ("B") LDO5/LDO7; all exist in
-cmd-db. The dtsi defines the ones the front and IR cameras use: `regulators-8`
-(`qcom,pm8010-rpmh-regulators`, `qcom,pmic-id = "m"`, supply parents as on the X1E CRD) with
-`vreg_l1m_1p2`, `vreg_l3m_1p8`, `vreg_l4m_1p8`, `vreg_l7m_2p8`, and `vreg_l5b_3p0` in the
-B-rail node. Not defined until the rear camera needs them: LDO2_M 1.2 V, LDO5_M 2.8 V, LDO6_M
-1.8 V (parents of l5/l6 unknown) and PM8550 LDO7 2.8 V. The PM8010 SPMI node
+cmd-db. The dtsi defines `regulators-8` (`qcom,pm8010-rpmh-regulators`, `qcom,pmic-id =
+"m"`, supply parents as on the X1E CRD, l6 fed from `vreg_s4c_1p8` like l3/l4) with
+`vreg_l1m_1p2`, `vreg_l2m_1p2`, `vreg_l3m_1p8`, `vreg_l4m_1p8` (always-on, see the rear
+camera), `vreg_l6m_1p8`, `vreg_l7m_2p8`, and `vreg_l5b_3p0` / `vreg_l7b_2p8` in the B-rail
+node. Not defined: LDO5_M 2.8 V (the rear VCM; parent presumably `vreg_bob1`). The PM8010 SPMI node
 (`pm8010: pmic@c` in `hamoa-pmics.dtsi`) stays disabled; RPMh rails do not need it.
 
 ## Kernel pieces available in the pz13 tree (jglathe 7.2.5)
@@ -140,8 +160,12 @@ Zenbook A14 ov02c10 node in this tree is the reference for the csiphy4 path.
 2. CAMSS, CCI and CSIPHY4 probe together with the front sensor.
 3. Front camera: OV5675 on cci1_i2c1 / csiphy4 with LDO3_M and LDO5_B, TLMM 6 not needed;
    probes and streams, libcamera capture and GNOME Snapshot work.
-4. IR: needs the hm1092 driver and the combo-mode patches (next section); streams. Rear:
-   not started (driver has no regulator support; VCM/EEPROM optional).
+4. IR: needs the hm1092 driver and the combo-mode patches (next section); streams.
+5. Rear: with `patches/0006` the OV13858 probes at 0x36 on cci0_i2c0 and streams 640×480
+   at 30 fps through csiphy0 (4 lanes). Diagnosis path: a diagnostic module build that
+   leaves the sensor powered after a failed chip-ID read, `i2cdetect` on all CCI buses
+   (VCM found on bus cci0_i2c0 once LDO5_M was on), the address from the sensor-module
+   binary, then rail elimination with `regulator-always-on` test DTBs.
 
 ## IR camera: combo mode
 

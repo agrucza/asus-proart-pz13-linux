@@ -13,10 +13,10 @@ Windows ACPI dump (DSDT). Kernel: `jg/ubuntu-qcom-x1e-7.2.y` from
 | `dts/x1p42100-asus-proart-pz13.dts` | Board file: model, firmware paths, GPU, WLAN PMU, panel |
 | `dts/x1-asus-proart-pz13.dtsi` | Regulators (incl. PM8010 camera rails), USB, PCIe, I2C devices, pinctrl, display, audio, front and IR camera |
 | `ucm2/Qualcomm/x1e80100/` | UCM profile (alsa-ucm-conf) for the sound card: two `.conf` files plus `x1e80100.conf.patch` for the DMI dispatcher |
-| `install/` | systemd-boot entry, initramfs hook, keyboard backlight script, Fn-key daemon + unit, gnome-shell extension for locking on suspend, WirePlumber override that enables the libcamera monitor, libcamera tuning file for the OV5675, sleep hook that re-initialises the cover after resume |
+| `install/` | systemd-boot entry, initramfs hook, keyboard backlight script, Fn-key daemon + unit, gnome-shell extension for locking on suspend, WirePlumber override that enables the libcamera monitor, libcamera tuning files for the OV5675 and OV13858, sleep hook that re-initialises the cover after resume |
 | `notes/cameras.md` | Camera sensors and their wiring, decoded from the Windows driver package |
 | `tools/` | `aeob-parse.py` (decoder for the Windows camera resource binaries), `pz13-dpdiag.sh` (USB-C/DisplayPort alt-mode state dump) |
-| `patches/` | Kernel patches on top of jglathe's `jg/ubuntu-qcom-x1e-7.2.y`: the HM1092 sensor driver + binding (v6 from linux-media), CSIPHY combo-mode support in camss/phy-qcom-mipi-csi2 (ours, needed for the IR camera), and X1P42100 CAMSS support (Wenmeng Liu v3 from linux-media, needed because Purwa has no IFE1: with the X1E description every suspend/resume toggled a non-existent power domain) |
+| `patches/` | Kernel patches on top of jglathe's `jg/ubuntu-qcom-x1e-7.2.y`: the HM1092 sensor driver + binding (v6 from linux-media), CSIPHY combo-mode support in camss/phy-qcom-mipi-csi2 (ours, needed for the IR camera), X1P42100 CAMSS support (Wenmeng Liu v3 from linux-media, needed because Purwa has no IFE1: with the X1E description every suspend/resume toggled a non-existent power domain), device-tree support for the OV13858 rear-camera driver (ours: supplies, reset line, OF match, binding), the PZ13 entry in the SCM driver's QSEECOM allow-list (ours; RTC and UEFI variables), and a HID battery quirk for the ELAN touch controller's bogus stylus battery (ours) |
 
 Kernel integration: copy both DTS files to `arch/arm64/boot/dts/qcom/`, add
 `dtb-$(CONFIG_ARCH_QCOM) += x1p42100-asus-proart-pz13.dtb` to the `Makefile`, and the
@@ -38,18 +38,20 @@ appear identically on `x1e80100-crd.dtb`.
 | GPU (Adreno X1-45) | hardware accelerated with Mesa ≥ 25.2 (trixie-backports 26.1); firmware `gen71500_sqe.fw`/`gen71500_gmu.bin` from linux-firmware git (trixie's package is too old); the ZAP shader must be the ASUS-signed `qcdxkmsucpurwa.mbn` from the Windows driver, the generic `qcom/x1p42100/gen71500_zap.mbn` is rejected by TrustZone (`error -22`, GPU stays off, Mesa falls back to llvmpipe; tested 2026-10-06) |
 | NVMe (pcie6a) | works |
 | WLAN WCN7850 (pcie4, ath12k) | works (NetworkManager); ath12k uses the generic board file, the ASUS variant is missing from linux-firmware |
-| Bluetooth (uart14) | `hci0: setting up wcn7850` in the log; pairing not tested |
+| Bluetooth (uart14) | works: the ASUS Pen pairs and connects (BLE), its battery service shows up in BlueZ and UPower |
 | USB-C ×2 (usb_1_ss0/ss1) incl. ps883x retimers | works (stick, LAN adapter, charger, SuperSpeed on both ports); DisplayPort alt mode works on both ports (passive USB-C→DP adapter, picture on the monitor; `tools/pz13-dpdiag.sh` shows the ADSP reporting the mode, the PHY switching to DP and `msm_dp_ctrl_setup_tr_unit` after link training); DP audio untested |
 | Keyboard cover (usb_mp, 0b05:1b6e) | keyboard, Caps LED, touchpad, mute/volume, display switch work natively; Fn+F4–F12 and the backlight via the userspace daemon `install/pz13-fnkeys.py`; Fn lock not available (see below) |
-| Touchscreen + pen (ELAN 04F3:430A, i2c8 @0x10, IRQ tlmm 51) | works, incl. stylus collection and pen battery |
+| Touchscreen + pen (ELAN 04F3:430A, i2c8 @0x10, IRQ tlmm 51) | works, incl. stylus collection. The controller's stylus battery report is bogus (constant 1 % with the pen in range, also after hours of charging), so `patches/0008` ignores it like the Surface Pro 12's ELAN controller. The pen's real charge level comes over Bluetooth once the pen is paired (BLE battery service, shown by UPower and GNOME) |
 | EC HID (0B05:4543, i2c0 @0x17, IRQ tlmm 67) | bound (hidraw), hotkey events not decoded yet |
 | Lid sensor (tlmm 92) | registered as gpio-keys; lid event not tested |
 | Volume buttons (pm8550 GPIO 6 up, GPIO 8 down) | work via gpio-keys (GNOME volume popup) |
-| ADSP/CDSP, UCSI (PD controller), battery/charging (qcom_battmgr) | works |
+| RTC (PMK8550) and UEFI variables | work with `patches/0007` (PZ13 on the SCM driver's QSEECOM allow-list): the TrustZone UEFI variable service comes up, `/sys/firmware/efi/efivars` is populated, the RTC registers as `rtc0` and sets the system clock at boot; its offset is kept in a UEFI variable (`qcom,uefi-rtc-info`), the alarm belongs to the ADSP |
+| ADSP/CDSP, UCSI (PD controller), battery/charging (qcom_battmgr) | works. Battery: state, energy now/full/design (health from the ratio), voltage, power while charging and discharging, temperature, cycle count, manufacture date, model and serial. Charge limit: `charge_control_{start,end}_threshold` (start = end − 5, e.g. 75/80) is applied by the firmware within a session, but not kept across a reboot: the firmware mirrors the limit into PMK8550 SDAM 15 (the cells the Vivobook S15 DTS wires to `pmic-glink`) only when the OS sets one and zeroes those bytes at every boot, so wiring the cells gains nothing here, and no UEFI variable holds it either. UPower re-applies the limit at startup, so GNOME Settings' "Preserve Battery Health" switch (75/80) survives a reboot from the user's point of view; but between power-off and the next boot the firmware charges without the limit. Charger: USB-C PD/PPS flagged and the operating current (3.25 A) reported per port; the negotiated voltage and wattage are not available on this firmware: UCSI advertises features 0x0004 (no PDO details) and rejects a forced GET_PDOS (-70), and the battery manager answers every per-property charger request with value 0 |
 | Suspend/resume (PSCI "deep") | works, also on battery and with the camera drivers loaded (kernel -7 with the X1P42100 CAMSS description; the X1E description toggles the non-existent `cam_cc_ife_1_gdsc` on every suspend/resume). The cover cannot wake the tablet: a short key press during suspend only powers the cover briefly (backlight blinks), holding a key for 3–5 s triggers the keyboard's firmware reset. Waking is by power button. `usb_mp` has no `wakeup-source`: with USB wakeup the port stays stuck in link state Resume after the keyboard's firmware reset (`xhci-hcd.1.auto: Port resume timed out, port 1-2`, "Cannot enable") until the controller is re-bound; without it the controller is shut down at suspend and rebuilt at resume and the cover comes back. The keyboard's firmware reset also wipes the cover's state while the kernel reset-resumes it as the same device, so `install/pz13-cover-usb-resume` (systemd-sleep hook) re-sends the backlight feature report after every resume; the cover only emits Fn-layer reports after that (verified sequence: suspend, keyboard reset by holding a key, key press, power button: keyboard, backlight and Fn+F keys working) |
 | Audio | works: speakers (2× WSA8845 on swr0, `sdw:1:0:0217:0204:00:{0,1}`) and microphones (DMICs on the VA macro, `l1b` enabled through `audio-routing` to `vdd-micb`) in GNOME; no headset jack, no WCD codec. Needs topology + UCM (see Installation) |
 | Front camera (OV5675, cci1_i2c1 @0x36, csiphy4, MCLK4, PM8010 rails) | works: libcamera lists "Internal front camera", `cam` streams 640×480 at 30 fps, GNOME Snapshot shows the live preview, and with libcamera 0.7.1 from trixie-backports plus `install/libcamera-ov5675.yaml` (Qualcomm's own colour matrices) the picture has correct exposure and plausible colours. Full-resolution `cam` output fails to allocate its buffers from the default 128 MB CMA pool (`cma=256M` on the command line should fix it, untested). Needs the WirePlumber override from `install/` (see Installation). Wiring derived from the Windows package, see `notes/cameras.md` |
 | IR camera (HM1092, cci0_i2c1 @0x24, MCLK1, reset tlmm 111, csiphy4 lane 2 in combo mode with the RGB sensor) | streams: `cam -s role=raw` delivers 560×360 10-bit mono at 29.7 fps and the frame shows the room in near-infrared. Needs the kernel patches in `patches/` (HM1092 driver from linux-media + CSIPHY combo-mode support). Image is only ambient IR: the PM8550 illuminator is not wired up yet |
+| Rear camera (OV13858, cci0_i2c0 @0x36, csiphy0 4 lanes, MCLK0, reset tlmm 109) | works: libcamera lists "Internal back camera", `cam` streams 640×480 at 30 fps and the frames show the room (exposure settles within a few dozen frames; colours flat without a tuning file); GNOME Snapshot switches between front and rear camera (WirePlumber rule names it "PZ13 rear camera", the front camera stays the default). Needs `patches/0006` (device-tree support for the ov13858 driver: supplies, reset, OF match). Sensor rails PM8550 LDO7 (AVDD), PM8010 LDO2 (DVDD) and LDO6 (DOVDD); the sensor only answers while PM8010 LDO4 (the IR camera's I/O rail) is on as well, so that rail is always-on. Focus motor DW9714 @0x0c (PM8010 LDO5, `lens-focus` of the sensor, ancillary link present in the media graph) and the module EEPROM 24c64 @0x50 (PM8010 LDO6, reads as empty apart from a 4-byte header) are described; the motor works (`v4l2-ctl -d <lens subdev> --set-ctrl=focus_absolute=0..1023`, verified by sharpness at 0 vs 1000) but libcamera's software-ISP pipeline has no autofocus and does not expose the lens, so focus is manual via V4L2 for now (the lens keeps its last position across streams; 0 = infinity). `install/libcamera-ov13858.yaml` (Qualcomm's CC13 matrices from `com.qti.tuned.ov13858.bin`, same decoding as for the front camera) gives stronger, more plausible colours; with the software ISP's lack of highlight handling, clipped highlights turn magenta under artificial light |
 | Rear camera (OV13858) | not started; wiring known (`notes/cameras.md`), the mainline driver has no regulator support |
 | Sensor DSP, fan control | not implemented |
 
@@ -85,7 +87,8 @@ PCIe supplies per the Windows PEP tables (match the DTS): pcie6a `LDO2_J` 1.256 
 
 EC protocol (for a future driver): i2c5 @0x5B, 6-byte command to reg 0x10, 3-byte reply from
 reg 0x11; bank 0xC9 reg 0x6E/0x6F = mailbox, bank 0xC4 reg 0x4F = hotkey event. Battery and
-charging go through pmic_glink (ADSP) as on the Zenbook, not through the EC.
+charging go through pmic_glink (ADSP) as on the Zenbook, not through the EC. The EC firmware
+identifies itself as `F01740D4.HT5306QA.312` (UEFI variable `AsusEcVersion`).
 
 ## Differences from the Zenbook A14 (and why)
 
@@ -197,9 +200,6 @@ capture of the vendor feature reports:
 - Keyboard cover: `install/kbdlight.py` → `/usr/local/bin/kbdlight`, `install/pz13-fnkeys.py` → `/usr/local/bin/pz13-fnkeys` plus
   `install/pz13-fnkeys.service` → `/etc/systemd/system/` (needs `python3-evdev`;
   `systemctl enable --now pz13-fnkeys`).
-- Waking with the power button sometimes needs several presses: the journal shows a single
-  `PM: suspend exit` per cycle 12–21 s after entry, i.e. the first presses do not register as
-  wake events although the PMIC power key has wakeup enabled. Not investigated.
 - Lock screen and suspend (GNOME 48): without `install/pz13-sleep-lock@asus-proart-pz13`,
   suspend starts only 5 s after the request and after resume the screen goes dark again
   about 1.3 s after it came on, until touched. Cause (gnome-settings-daemon debug logs,
@@ -250,7 +250,8 @@ capture of the vendor feature reports:
   1.6.9: `apt install -t trixie-backports libcamera-tools libcamera-ipa
   gstreamer1.0-libcamera pipewire pipewire-bin wireplumber libspa-0.2-libcamera`, then
   `systemctl --user daemon-reload && systemctl --user restart pipewire wireplumber`) and
-  copy `install/libcamera-ov5675.yaml` to `/usr/share/libcamera/ipa/simple/ov5675.yaml`.
+  copy `install/libcamera-ov5675.yaml` to `/usr/share/libcamera/ipa/simple/ov5675.yaml`
+  and `install/libcamera-ov13858.yaml` to `/usr/share/libcamera/ipa/simple/ov13858.yaml`.
   The matrices in it are Qualcomm's own CC13 tuning for this module, decoded from
   `com.qti.tuned.ov5675.bin` in the Windows camera package.
 
@@ -262,29 +263,34 @@ capture of the vendor feature reports:
 2. **Keyboard backlight / hotkeys in the kernel**: hid-asus has to coexist with the
    multitouch interface; the vendor code table above is what such support needs. Userspace
    daemon until then.
-3. **Rare double boot** (reset early in boot, no journal): watchdog ruled out; GPIO 65 is
-   reserved, under observation. A single unexplained reset out of suspend (no resume
-   messages in the journal) is on record; suspend cycles with all camera drivers loaded
-   resume cleanly, so it is filed here as a one-off until it recurs (`pm_debug_messages`
-   helps if it does).
-4. **DTS**: clarify `VREG_MISC_3P3` (Zenbook, purpose on the PZ13 unknown); add
+3. **DTS**: clarify `VREG_MISC_3P3` (Zenbook, purpose on the PZ13 unknown); add
    `RPMH_LN_BB_CLK2` for the WCN7850; map tlmm 149/150 (EC GPIOs).
-5. **Cameras**: front and IR work (see "What works"). Open: the IR illuminator (PM8550 flash
+4. **Cameras**: front, IR and rear work (see "What works"). Open: the IR illuminator (PM8550 flash
    LED, Zenbook A14 uses channel 4 at 700 mA, PZ13 channel unknown), a libcamera tuning file
-   for the HM1092, the rear OV13858 (driver needs regulator support), and
+   for the HM1092 and the OV13858, the rear camera's focus motor and EEPROM nodes, the
+   ov13858 driver's missing selection ioctls (libcamera warns about them), and
    upstreaming the combo-mode PHY support properly (a binding for it is under review on
    linux-media, ours is a submode hack). Sensor DSP and fan are separate topics.
-6. **DisplayPort alt mode**: works on both ports (see "What works"). Still open: DP audio, and the harmless
+5. **DisplayPort alt mode**: works on both ports (see "What works"). Still open: DP audio, and the harmless
    boot-time `msm_dp_display_probe: init sub module failed` from one controller that binds a
    second later.
-7. **Upstream**: QREF/l3j report to linux-arm-msm; DTS to jglathe and upstream.
-8. **Cover USB port after the keyboard's firmware reset** (see "What works"): solved by not using USB wakeup
+6. **Upstream**: QREF/l3j report to linux-arm-msm; DTS to jglathe and upstream.
+7. **Cover USB port after the keyboard's firmware reset** (see "What works"): solved by not using USB wakeup
    on `usb_mp`; the kernel-side weakness (xhci/dwc3-qcom not recovering a port whose device
    disconnects during a wakeup-enabled resume) remains and would be worth reporting with the
    log. The two eUSB2 repeaters of `usb_mp` are described
    (PTN3222 at 0x43 and 0x4f on the EC's I2C bus, resets TLMM 6 and 184, taken from the
    `\_SB.USB3` resources); they probe but did not change this behaviour. Which repeater
    serves which port is unverified (Zenbook mapping assumed).
+8. **Suspend/resume leftovers**: the mutter 48 stall (no frame progress while the display is
+   off, see "What works") is worked around by the gnome-shell extension and should be
+   reported upstream with the evidence. No alarm wake: the PMIC RTC's alarm is owned by
+   the ADSP (`qcom,no-alarm`).
+9. **Panel**: the Samsung ATNA33AA08-0 OLED (EDID SDC 0x41b0) is unknown to panel-edp,
+   which uses conservative timings (2 s before the panel may be powered on again after a
+   power-off). The sibling ASUS boards describe their Samsung OLEDs with the dedicated
+   `samsung,atna33xc20` driver and the PMIC enable line (`edp_bl_en`, defined but unused
+   here); switching needs a controlled test since it drives that line.
 
 ## Upstream references (linux-arm-msm)
 

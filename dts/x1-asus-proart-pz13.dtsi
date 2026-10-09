@@ -517,6 +517,13 @@
 			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
 		};
 
+		vreg_l7b_2p8: ldo7 {
+			regulator-name = "vreg_l7b_2p8";
+			regulator-min-microvolt = <2800000>;
+			regulator-max-microvolt = <2800000>;
+			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
+		};
+
 		vreg_l6b_1p8: ldo6 {
 			regulator-name = "vreg_l6b_1p8";
 			regulator-min-microvolt = <1800000>;
@@ -786,8 +793,7 @@
 	/*
 	 * PM8010 (camera PMIC, pmic-id "m"). All seven LDOs exist in cmd-db
 	 * (ldom1..ldom7). Voltages from the Windows camera power sequences, supply
-	 * parents as on the X1E CRD. Only the rails of the front and IR cameras are
-	 * defined; the rear camera's (l2m, l5m, l6m, pm8550 l7b) follow with it.
+	 * parents as on the X1E CRD. l5m (2.8 V) feeds the rear camera's VCM.
 	 */
 	regulators-8 {
 		compatible = "qcom,pm8010-rpmh-regulators";
@@ -795,10 +801,19 @@
 
 		vdd-l1-l2-supply = <&vreg_s5j_1p2>;
 		vdd-l3-l4-supply = <&vreg_s4c_1p8>;
+		vdd-l5-supply = <&vreg_bob1>;
+		vdd-l6-supply = <&vreg_s4c_1p8>;
 		vdd-l7-supply = <&vreg_bob1>;
 
 		vreg_l1m_1p2: ldo1 {
 			regulator-name = "vreg_l1m_1p2";
+			regulator-min-microvolt = <1200000>;
+			regulator-max-microvolt = <1200000>;
+			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
+		};
+
+		vreg_l2m_1p2: ldo2 {
+			regulator-name = "vreg_l2m_1p2";
 			regulator-min-microvolt = <1200000>;
 			regulator-max-microvolt = <1200000>;
 			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
@@ -811,8 +826,30 @@
 			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
 		};
 
+		/*
+		 * I/O rail of the IR camera (its dovdd-supply). The rear camera's
+		 * sensor only answers on cci0_i2c0 while this rail is on as well
+		 * (Windows switches it on in the rear camera's sequence too),
+		 * presumably the pull-ups of that bus hang on it. Nothing can
+		 * request it on behalf of a bus, so keep it on (PZ13-TODO).
+		 */
 		vreg_l4m_1p8: ldo4 {
 			regulator-name = "vreg_l4m_1p8";
+			regulator-min-microvolt = <1800000>;
+			regulator-max-microvolt = <1808000>;
+			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
+			regulator-always-on;
+		};
+
+		vreg_l5m_2p8: ldo5 {
+			regulator-name = "vreg_l5m_2p8";
+			regulator-min-microvolt = <2800000>;
+			regulator-max-microvolt = <2800000>;
+			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
+		};
+
+		vreg_l6m_1p8: ldo6 {
+			regulator-name = "vreg_l6m_1p8";
 			regulator-min-microvolt = <1800000>;
 			regulator-max-microvolt = <1808000>;
 			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
@@ -836,8 +873,10 @@
  * Qualcomm "combo mode": RGB on DL0/DL1 with the clock lane, IR on DL2 with
  * DL3 as its clock lane (module descriptions: isComboMode = 1, laneAssign 2).
  * Streams with the camss/csiphy combo-mode patches in patches/.
- * PZ13-TODO: PM8550 IR illuminator (\_SB.FLSH in ACPI). Rear OV13858
- * (MCLK0, reset tlmm 109) is not wired up yet (PZ13-TODO).
+ * Rear OV13858 on cci0_i2c0 / csiphy0 (4 lanes) / MCLK0, reset tlmm 109;
+ * needs the ov13858 device-tree support patch in patches/; VCM dw9714 @0x0c
+ * and module EEPROM 24c64 @0x50 on the same bus.
+ * PZ13-TODO: PM8550 IR illuminator (\_SB.FLSH in ACPI).
  */
 /*
  * X1P42100 (Purwa) has a smaller CAMSS than the X1E80100 described in
@@ -954,6 +993,13 @@
 				reg = <0>;
 				#address-cells = <1>;
 				#size-cells = <0>;
+
+				csiphy0_ep: endpoint@0 {
+					reg = <0>;
+					clock-lanes = <7>;
+					data-lanes = <0 1 2 3>;
+					remote-endpoint = <&ov13858_ep>;
+				};
 			};
 
 			port@1 {
@@ -981,6 +1027,54 @@
 
 &cci0 {
 	status = "okay";
+};
+
+&cci0_i2c0 {
+	/* Rear (world-facing) camera; the module straps the sensor to 0x36 */
+	camera@36 {
+		compatible = "ovti,ov13858";
+		reg = <0x36>;
+
+		reset-gpios = <&tlmm 109 GPIO_ACTIVE_LOW>;
+		pinctrl-0 = <&cam_rear_default>;
+		pinctrl-names = "default";
+
+		/* Windows runs MCLK0 at 24 MHz; the Linux driver requires 19.2 MHz */
+		clocks = <&camcc CAM_CC_MCLK0_CLK>;
+		assigned-clocks = <&camcc CAM_CC_MCLK0_CLK>;
+		assigned-clock-rates = <19200000>;
+
+		orientation = <1>;
+
+		avdd-supply = <&vreg_l7b_2p8>;
+		dovdd-supply = <&vreg_l6m_1p8>;
+		dvdd-supply = <&vreg_l2m_1p2>;
+
+		lens-focus = <&rear_vcm>;
+
+		port {
+			ov13858_ep: endpoint {
+				data-lanes = <1 2 3 4>;
+				link-frequencies = /bits/ 64 <540000000 270000000>;
+				remote-endpoint = <&csiphy0_ep>;
+			};
+		};
+	};
+
+	/* Rear camera focus motor (Windows module data: actuator at 0x18 8-bit) */
+	rear_vcm: camera-lens@c {
+		compatible = "dongwoon,dw9714";
+		reg = <0x0c>;
+		vcc-supply = <&vreg_l5m_2p8>;
+	};
+
+	/* Rear camera module EEPROM (Windows module data: 0xa0 8-bit, 16-bit addresses) */
+	eeprom@50 {
+		compatible = "atmel,24c64";
+		reg = <0x50>;
+		vcc-supply = <&vreg_l6m_1p8>;
+		read-only;
+	};
 };
 
 &cci0_i2c1 {
@@ -1047,6 +1141,14 @@
 			};
 		};
 	};
+};
+
+&csiphy0 {
+	vdda-0p8-supply = <&vreg_l2c_0p8>;
+	vdda-1p2-supply = <&vreg_l1c_1p2>;
+	phy-type = <PHY_TYPE_DPHY>;
+
+	status = "okay";
 };
 
 &csiphy4 {
@@ -1570,6 +1672,22 @@
 
 		reset-n-pins {
 			pins = "gpio111";
+			function = "gpio";
+			drive-strength = <2>;
+			bias-disable;
+		};
+	};
+
+	cam_rear_default: cam-rear-default-state {
+		mclk-pins {
+			pins = "gpio96";
+			function = "cam_mclk";
+			drive-strength = <16>;
+			bias-disable;
+		};
+
+		reset-n-pins {
+			pins = "gpio109";
 			function = "gpio";
 			drive-strength = <2>;
 			bias-disable;
