@@ -1,0 +1,29 @@
+From 7d90dac66b78d30d34182f7bcd8efa7f3be7e247 Mon Sep 17 00:00:00 2001
+From: Alex Grucza <alex.grucza@googlemail.com>
+Date: Fri, 9 Oct 2026 11:13:53 +0200
+Subject: [PATCH] firmware: qcom: scm: allow QSEECOM on the ASUS ProArt PZ13
+
+Add the ASUS ProArt PZ13 (HT5306QA, X1P42100) to the QSEECOM allow-list
+so that the UEFI variable service (uefisecapp) becomes available: it is
+needed for efivars and for the PMK8550 RTC, whose driver waits for it.
+
+Signed-off-by: Alex Grucza <alex.grucza@googlemail.com>
+---
+ drivers/firmware/qcom/qcom_scm.c | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/drivers/firmware/qcom/qcom_scm.c b/drivers/firmware/qcom/qcom_scm.c
+index 87eebf53b..988602b37 100644
+--- a/drivers/firmware/qcom/qcom_scm.c
++++ b/drivers/firmware/qcom/qcom_scm.c
+@@ -2289,6 +2289,7 @@ EXPORT_SYMBOL_GPL(qcom_scm_qseecom_app_send);
+ static const struct of_device_id qcom_scm_qseecom_allowlist[] __maybe_unused = {
+ 	{ .compatible = "acer,swift-sf14-11" },
+ 	{ .compatible = "acer,swift-go14-01" },
++	{ .compatible = "asus,proart-pz13-ht5306qa" },
+ 	{ .compatible = "asus,vivobook-s15" },
+ 	{ .compatible = "asus,vivobook-s15-x1p4" },
+ 	{ .compatible = "asus,zenbook-a14-ux3407qa" },
+-- 
+2.47.3
+

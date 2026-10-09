@@ -1,0 +1,403 @@
+From e89f266fc0899fa85f1f183662450b9fdeb894c8 Mon Sep 17 00:00:00 2001
+From: Alex Grucza <alex.grucza@googlemail.com>
+Date: Fri, 9 Oct 2026 00:01:02 +0200
+Subject: [PATCH] media: i2c: ov13858: add device tree support
+
+The OV13858 driver only probes via ACPI, where firmware handles the
+sensor's power. Add what a device tree platform needs: the AVDD, DOVDD
+and DVDD supplies, the XSHUTDN reset line and runtime PM callbacks that
+sequence them with the XVCLK clock, an OF match entry, and a check of
+the CSI-2 endpoint (four data lanes, link frequencies). ACPI probing
+is unchanged: the regulators resolve to dummies and the reset GPIO is
+optional.
+
+Add the ovti,ov13858 binding.
+
+Used for the rear camera of the ASUS ProArt PZ13 (X1P42100).
+
+Signed-off-by: Alex Grucza <alex.grucza@googlemail.com>
+---
+ .../bindings/media/i2c/ovti,ov13858.yaml      | 107 ++++++++++++
+ drivers/media/i2c/ov13858.c                   | 162 +++++++++++++++++-
+ 2 files changed, 262 insertions(+), 7 deletions(-)
+ create mode 100644 Documentation/devicetree/bindings/media/i2c/ovti,ov13858.yaml
+
+diff --git a/Documentation/devicetree/bindings/media/i2c/ovti,ov13858.yaml b/Documentation/devicetree/bindings/media/i2c/ovti,ov13858.yaml
+new file mode 100644
+index 000000000..6d9ae5507
+--- /dev/null
++++ b/Documentation/devicetree/bindings/media/i2c/ovti,ov13858.yaml
+@@ -0,0 +1,107 @@
++# SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
++%YAML 1.2
++---
++$id: http://devicetree.org/schemas/media/i2c/ovti,ov13858.yaml#
++$schema: http://devicetree.org/meta-schemas/core.yaml#
++
++title: OmniVision OV13858 Image Sensor
++
++maintainers:
++  - Sakari Ailus <sakari.ailus@linux.intel.com>
++
++description:
++  The OmniVision OV13858 is a 1/3.06" 13 megapixel CMOS image sensor with a
++  MIPI CSI-2 interface, controlled over I2C. It outputs 10-bit raw Bayer data
++  on four data lanes.
++
++allOf:
++  - $ref: /schemas/media/video-interface-devices.yaml#
++
++properties:
++  compatible:
++    const: ovti,ov13858
++
++  reg:
++    maxItems: 1
++
++  clocks:
++    description: Reference to the XVCLK clock, 19.2 MHz.
++    maxItems: 1
++
++  avdd-supply:
++    description: Analog power supply, 2.8 V.
++
++  dovdd-supply:
++    description: Digital I/O power supply, 1.8 V.
++
++  dvdd-supply:
++    description: Digital core power supply, 1.2 V.
++
++  reset-gpios:
++    description: Reference to the GPIO connected to the XSHUTDN pin, active low.
++    maxItems: 1
++
++  port:
++    $ref: /schemas/graph.yaml#/$defs/port-base
++    additionalProperties: false
++
++    properties:
++      endpoint:
++        $ref: /schemas/media/video-interfaces.yaml#
++        unevaluatedProperties: false
++
++        properties:
++          data-lanes:
++            items:
++              - const: 1
++              - const: 2
++              - const: 3
++              - const: 4
++
++          link-frequencies: true
++
++        required:
++          - data-lanes
++          - link-frequencies
++
++required:
++  - compatible
++  - reg
++  - clocks
++  - avdd-supply
++  - dovdd-supply
++  - dvdd-supply
++  - port
++
++unevaluatedProperties: false
++
++examples:
++  - |
++    #include <dt-bindings/gpio/gpio.h>
++
++    i2c {
++        #address-cells = <1>;
++        #size-cells = <0>;
++
++        camera@10 {
++            compatible = "ovti,ov13858";
++            reg = <0x10>;
++
++            clocks = <&cam_mclk0>;
++
++            avdd-supply = <&vreg_cam_avdd>;
++            dovdd-supply = <&vreg_cam_dovdd>;
++            dvdd-supply = <&vreg_cam_dvdd>;
++
++            reset-gpios = <&tlmm 109 GPIO_ACTIVE_LOW>;
++
++            port {
++                ov13858_ep: endpoint {
++                    data-lanes = <1 2 3 4>;
++                    link-frequencies = /bits/ 64 <540000000 270000000>;
++                    remote-endpoint = <&csiphy0_ep>;
++                };
++            };
++        };
++    };
++...
+diff --git a/drivers/media/i2c/ov13858.c b/drivers/media/i2c/ov13858.c
+index 09d58e8b1..060182e6c 100644
+--- a/drivers/media/i2c/ov13858.c
++++ b/drivers/media/i2c/ov13858.c
+@@ -3,9 +3,13 @@
+ 
+ #include <linux/acpi.h>
+ #include <linux/clk.h>
++#include <linux/delay.h>
++#include <linux/gpio/consumer.h>
+ #include <linux/i2c.h>
++#include <linux/mod_devicetable.h>
+ #include <linux/module.h>
+ #include <linux/pm_runtime.h>
++#include <linux/regulator/consumer.h>
+ #include <media/v4l2-ctrls.h>
+ #include <media/v4l2-device.h>
+ #include <media/v4l2-event.h>
+@@ -938,6 +942,16 @@ static const char * const ov13858_test_pattern_menu[] = {
+ 
+ /* Configurations for supported link frequencies */
+ #define OV13858_NUM_OF_LINK_FREQS	2
++#define OV13858_DATA_LANES		4
++#define OV13858_XVCLK_FREQ		19200000
++
++static const char * const ov13858_supply_names[] = {
++	"avdd",		/* Analog power */
++	"dovdd",	/* Digital I/O power */
++	"dvdd",		/* Digital core power */
++};
++
++#define OV13858_NUM_SUPPLIES	ARRAY_SIZE(ov13858_supply_names)
+ #define OV13858_LINK_FREQ_540MHZ	540000000ULL
+ #define OV13858_LINK_FREQ_270MHZ	270000000ULL
+ #define OV13858_LINK_FREQ_INDEX_0	0
+@@ -1031,6 +1045,8 @@ static const struct ov13858_mode supported_modes[] = {
+ struct ov13858 {
+ 	struct device *dev;
+ 	struct clk *clk;
++	struct gpio_desc *reset_gpio;
++	struct regulator_bulk_data supplies[OV13858_NUM_SUPPLIES];
+ 
+ 	struct v4l2_subdev sd;
+ 	struct media_pad pad;
+@@ -1492,6 +1508,100 @@ static int ov13858_set_stream(struct v4l2_subdev *sd, int enable)
+ 	return ret;
+ }
+ 
++static int ov13858_power_off(struct device *dev)
++{
++	struct v4l2_subdev *sd = dev_get_drvdata(dev);
++	struct ov13858 *ov13858 = to_ov13858(sd);
++
++	gpiod_set_value_cansleep(ov13858->reset_gpio, 1);
++	clk_disable_unprepare(ov13858->clk);
++	regulator_bulk_disable(OV13858_NUM_SUPPLIES, ov13858->supplies);
++
++	return 0;
++}
++
++static int ov13858_power_on(struct device *dev)
++{
++	struct v4l2_subdev *sd = dev_get_drvdata(dev);
++	struct ov13858 *ov13858 = to_ov13858(sd);
++	int ret;
++
++	gpiod_set_value_cansleep(ov13858->reset_gpio, 1);
++
++	ret = regulator_bulk_enable(OV13858_NUM_SUPPLIES, ov13858->supplies);
++	if (ret) {
++		dev_err(dev, "failed to enable regulators: %d\n", ret);
++		return ret;
++	}
++
++	ret = clk_prepare_enable(ov13858->clk);
++	if (ret) {
++		dev_err(dev, "failed to enable clock: %d\n", ret);
++		regulator_bulk_disable(OV13858_NUM_SUPPLIES, ov13858->supplies);
++		return ret;
++	}
++
++	/* Supplies stable to XSHUTDN high: 5 ms is what the vendor setup uses */
++	usleep_range(5000, 6000);
++	gpiod_set_value_cansleep(ov13858->reset_gpio, 0);
++
++	/* XSHUTDN high to first I2C transaction: 8192 XVCLK cycles plus margin */
++	usleep_range(2000, 3000);
++
++	return 0;
++}
++
++static int ov13858_check_hwcfg(struct ov13858 *ov13858)
++{
++	struct v4l2_fwnode_endpoint bus_cfg = {
++		.bus_type = V4L2_MBUS_CSI2_DPHY
++	};
++	struct fwnode_handle *fwnode = dev_fwnode(ov13858->dev);
++	struct fwnode_handle *ep;
++	unsigned int i, j;
++	int ret;
++
++	ep = fwnode_graph_get_next_endpoint(fwnode, NULL);
++	if (!ep)
++		return 0;	/* ACPI without an endpoint: nothing to check */
++
++	ret = v4l2_fwnode_endpoint_alloc_parse(ep, &bus_cfg);
++	fwnode_handle_put(ep);
++	if (ret)
++		return ret;
++
++	if (bus_cfg.bus.mipi_csi2.num_data_lanes != OV13858_DATA_LANES) {
++		dev_err(ov13858->dev, "number of CSI2 data lanes %u is not supported\n",
++			bus_cfg.bus.mipi_csi2.num_data_lanes);
++		ret = -EINVAL;
++		goto out;
++	}
++
++	if (!bus_cfg.nr_of_link_frequencies) {
++		dev_err(ov13858->dev, "no link frequencies defined\n");
++		ret = -EINVAL;
++		goto out;
++	}
++
++	for (i = 0; i < OV13858_NUM_OF_LINK_FREQS; i++) {
++		for (j = 0; j < bus_cfg.nr_of_link_frequencies; j++)
++			if (link_freq_menu_items[i] == bus_cfg.link_frequencies[j])
++				break;
++
++		if (j == bus_cfg.nr_of_link_frequencies) {
++			dev_err(ov13858->dev, "link frequency %lld not in the endpoint\n",
++				link_freq_menu_items[i]);
++			ret = -EINVAL;
++			goto out;
++		}
++	}
++
++out:
++	v4l2_fwnode_endpoint_free(&bus_cfg);
++
++	return ret;
++}
++
+ /* Verify chip ID */
+ static int ov13858_identify_module(struct ov13858 *ov13858)
+ {
+@@ -1659,6 +1769,7 @@ static int ov13858_probe(struct i2c_client *client)
+ {
+ 	struct ov13858 *ov13858;
+ 	unsigned long freq;
++	unsigned int i;
+ 	int ret;
+ 
+ 	ov13858 = devm_kzalloc(&client->dev, sizeof(*ov13858), GFP_KERNEL);
+@@ -1673,19 +1784,42 @@ static int ov13858_probe(struct i2c_client *client)
+ 				     "failed to get clock\n");
+ 
+ 	freq = clk_get_rate(ov13858->clk);
+-	if (freq != 19200000)
++	if (freq != OV13858_XVCLK_FREQ)
+ 		return dev_err_probe(ov13858->dev, -EINVAL,
+ 				     "external clock %lu is not supported\n",
+ 				     freq);
+ 
++	ov13858->reset_gpio = devm_gpiod_get_optional(ov13858->dev, "reset",
++						      GPIOD_OUT_HIGH);
++	if (IS_ERR(ov13858->reset_gpio))
++		return dev_err_probe(ov13858->dev, PTR_ERR(ov13858->reset_gpio),
++				     "failed to get reset GPIO\n");
++
++	for (i = 0; i < OV13858_NUM_SUPPLIES; i++)
++		ov13858->supplies[i].supply = ov13858_supply_names[i];
++
++	ret = devm_regulator_bulk_get(ov13858->dev, OV13858_NUM_SUPPLIES,
++				      ov13858->supplies);
++	if (ret)
++		return dev_err_probe(ov13858->dev, ret,
++				     "failed to get regulators\n");
++
++	ret = ov13858_check_hwcfg(ov13858);
++	if (ret)
++		return ret;
++
+ 	/* Initialize subdev */
+ 	v4l2_i2c_subdev_init(&ov13858->sd, client, &ov13858_subdev_ops);
+ 
++	ret = ov13858_power_on(ov13858->dev);
++	if (ret)
++		return ret;
++
+ 	/* Check module identity */
+ 	ret = ov13858_identify_module(ov13858);
+ 	if (ret) {
+ 		dev_err(ov13858->dev, "failed to find sensor: %d\n", ret);
+-		return ret;
++		goto error_power_off;
+ 	}
+ 
+ 	/* Set default mode to max resolution */
+@@ -1693,7 +1827,7 @@ static int ov13858_probe(struct i2c_client *client)
+ 
+ 	ret = ov13858_init_controls(ov13858);
+ 	if (ret)
+-		return ret;
++		goto error_power_off;
+ 
+ 	/* Initialize subdev */
+ 	ov13858->sd.internal_ops = &ov13858_internal_ops;
+@@ -1714,10 +1848,7 @@ static int ov13858_probe(struct i2c_client *client)
+ 	if (ret < 0)
+ 		goto error_media_entity;
+ 
+-	/*
+-	 * Device is already turned on by i2c-core with ACPI domain PM.
+-	 * Enable runtime PM and turn off the device.
+-	 */
++	/* The device is powered on; enable runtime PM and let it idle off. */
+ 	pm_runtime_set_active(ov13858->dev);
+ 	pm_runtime_enable(ov13858->dev);
+ 	pm_runtime_idle(ov13858->dev);
+@@ -1729,6 +1860,9 @@ static int ov13858_probe(struct i2c_client *client)
+ 
+ error_handler_free:
+ 	ov13858_free_controls(ov13858);
++
++error_power_off:
++	ov13858_power_off(ov13858->dev);
+ 	dev_err(ov13858->dev, "%s failed:%d\n", __func__, ret);
+ 
+ 	return ret;
+@@ -1744,8 +1878,14 @@ static void ov13858_remove(struct i2c_client *client)
+ 	ov13858_free_controls(ov13858);
+ 
+ 	pm_runtime_disable(ov13858->dev);
++	if (!pm_runtime_status_suspended(ov13858->dev))
++		ov13858_power_off(ov13858->dev);
++	pm_runtime_set_suspended(ov13858->dev);
+ }
+ 
++static DEFINE_RUNTIME_DEV_PM_OPS(ov13858_pm_ops, ov13858_power_off,
++				 ov13858_power_on, NULL);
++
+ static const struct i2c_device_id ov13858_id_table[] = {
+ 	{ .name = "ov13858" },
+ 	{ }
+@@ -1762,10 +1902,18 @@ static const struct acpi_device_id ov13858_acpi_ids[] = {
+ MODULE_DEVICE_TABLE(acpi, ov13858_acpi_ids);
+ #endif
+ 
++static const struct of_device_id ov13858_of_match[] = {
++	{ .compatible = "ovti,ov13858" },
++	{ /* sentinel */ }
++};
++MODULE_DEVICE_TABLE(of, ov13858_of_match);
++
+ static struct i2c_driver ov13858_i2c_driver = {
+ 	.driver = {
+ 		.name = "ov13858",
+ 		.acpi_match_table = ACPI_PTR(ov13858_acpi_ids),
++		.of_match_table = ov13858_of_match,
++		.pm = pm_ptr(&ov13858_pm_ops),
+ 	},
+ 	.probe = ov13858_probe,
+ 	.remove = ov13858_remove,
+-- 
+2.47.3
+
