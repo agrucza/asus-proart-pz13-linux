@@ -1,0 +1,58 @@
+From ba27f4929d7e8a6b14d312f07a1b5f389a9d4614 Mon Sep 17 00:00:00 2001
+From: agrucza <a.grucza@gmx.net>
+Date: Sat, 10 Oct 2026 19:36:50 +0200
+Subject: [PATCH 11/12] drm/msm/dp: don't force a retrain from the hot-plug
+ handler
+
+msm_dp_hpd_plug_handle() set the connector's link status to BAD whenever
+a plug notification arrived while the display was already powered on.
+Two problems: it runs from the bridge hpd_notify path, where the DRM
+core walks the encoder's bridge chain with the chain mutex held, and
+setting the property takes the modeset lock. An atomic check in flight
+holds the modeset lock and walks the same chain for the bridge states,
+so the two deadlock (seen on the ASUS ProArt PZ13 with DisplayPort
+audio in use, where the audio wait in the disable path keeps the window
+open for seconds). And on a port whose HPD bounces during negotiation,
+the forced retrain adds a full disable/enable cycle to every plug, with
+the audio stream racing its own teardown on the same DSP port.
+
+Mainline does not set the property there; it carries a TODO to schedule
+it. Drop it.
+
+Signed-off-by: agrucza <a.grucza@gmx.net>
+---
+ drivers/gpu/drm/msm/dp/dp_display.c | 5 -----
+ 1 file changed, 5 deletions(-)
+
+diff --git a/drivers/gpu/drm/msm/dp/dp_display.c b/drivers/gpu/drm/msm/dp/dp_display.c
+index 754ec79ca..e100c1afc 100644
+--- a/drivers/gpu/drm/msm/dp/dp_display.c
++++ b/drivers/gpu/drm/msm/dp/dp_display.c
+@@ -393,14 +393,12 @@ static int msm_dp_hpd_plug_handle(struct msm_dp_display_private *dp)
+ {
+ 	int ret;
+ 	struct platform_device *pdev = dp->msm_dp_display.pdev;
+-	bool was_plugged;
+ 
+ 	drm_dbg_dp(dp->drm_dev, "Before, type=%d sink_count=%d\n",
+ 			dp->msm_dp_display.connector_type,
+ 			dp->link->sink_count);
+ 
+ 	guard(mutex)(&dp->plugged_lock);
+-	was_plugged = dp->plugged;
+ 
+ 	ret = pm_runtime_resume_and_get(&pdev->dev);
+ 	if (ret) {
+@@ -414,9 +412,6 @@ static int msm_dp_hpd_plug_handle(struct msm_dp_display_private *dp)
+ 
+ 	ret = msm_dp_display_process_hpd_high(dp);
+ 
+-	if (!ret && dp->msm_dp_display.power_on && !was_plugged)
+-		drm_connector_set_link_status_property(dp->msm_dp_display.connector,
+-						       DRM_MODE_LINK_STATUS_BAD);
+ 
+ 	drm_dbg_dp(dp->drm_dev, "After, type=%d sink_count=%d\n",
+ 			dp->msm_dp_display.connector_type,
+-- 
+2.47.3
+

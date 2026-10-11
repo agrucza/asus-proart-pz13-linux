@@ -1,0 +1,81 @@
+From 584acd50666231de0c02ec93ce248063fc8b1692 Mon Sep 17 00:00:00 2001
+From: agrucza <a.grucza@gmx.net>
+Date: Sat, 10 Oct 2026 21:47:09 +0200
+Subject: [PATCH 12/12] drm/msm/dp: don't let the connector probe change the
+ plugged state
+
+msm_dp_bridge_detect() reads the sink over AUX and wrote the result into
+dp->plugged, the flag the HPD handlers use to pair plug and unplug. The
+probe runs on every hotplug event, including while the link is training,
+and a failed read then marked the port unplugged behind the HPD
+handlers' back: the next unplug notification was ignored (no jack event,
+no PHY shutdown, the controller left in a stale state that later makes
+link training fail with the display engine hung), and the next plug
+notification was treated as a fresh plug.
+
+Keep the probe's own result in a local variable for its PHY and
+runtime-PM handling and leave dp->plugged to the HPD handlers.
+
+Signed-off-by: agrucza <a.grucza@gmx.net>
+---
+ drivers/gpu/drm/msm/dp/dp_display.c | 13 +++++++------
+ 1 file changed, 7 insertions(+), 6 deletions(-)
+
+diff --git a/drivers/gpu/drm/msm/dp/dp_display.c b/drivers/gpu/drm/msm/dp/dp_display.c
+index e100c1afc..2bb57d51a 100644
+--- a/drivers/gpu/drm/msm/dp/dp_display.c
++++ b/drivers/gpu/drm/msm/dp/dp_display.c
+@@ -831,6 +831,7 @@ enum drm_connector_status msm_dp_bridge_detect(struct drm_bridge *bridge,
+ 	u8 dpcd[DP_RECEIVER_CAP_SIZE];
+ 	struct drm_dp_desc desc;
+ 	bool phy_deinit;
++	bool detected = false;
+ 	int ret;
+ 
+ 	dp = to_dp_bridge(bridge)->msm_dp_display;
+@@ -852,26 +853,23 @@ enum drm_connector_status msm_dp_bridge_detect(struct drm_bridge *bridge,
+ 	DRM_DEBUG_DP("aux link status: %x\n", ret);
+ 	if (!priv->plugged && !ret) {
+ 		DRM_DEBUG_DP("aux not connected\n");
+-		priv->plugged = false;
+ 		goto end;
+ 	}
+ 
+ 	ret = drm_dp_read_dpcd_caps(priv->aux, dpcd);
+ 	if (ret) {
+ 		DRM_DEBUG_DP("failed to read caps\n");
+-		priv->plugged = false;
+ 		goto end;
+ 	}
+ 
+ 	ret = drm_dp_read_desc(priv->aux, &desc, drm_dp_is_branch(dpcd));
+ 	if (ret) {
+ 		DRM_DEBUG_DP("failed to read desc\n");
+-		priv->plugged = false;
+ 		goto end;
+ 	}
+ 
+ 	status = connector_status_connected;
+-	priv->plugged = true;
++	detected = true;
+ 
+ 	if (drm_dp_read_sink_count_cap(connector, dpcd, &desc)) {
+ 		int sink_count = drm_dp_read_sink_count(priv->aux);
+@@ -885,9 +883,12 @@ enum drm_connector_status msm_dp_bridge_detect(struct drm_bridge *bridge,
+ end:
+ 	/*
+ 	 * If we detected the DPRX, leave the controller on so that it doesn't
+-	 * lose the state.
++	 * lose the state. The plugged flag belongs to the HPD handlers: a
++	 * failed AUX read here (the link may be training) must not mark the
++	 * port unplugged, or the next unplug is ignored and the next plug is
++	 * treated as a new one.
+ 	 */
+-	if (!priv->plugged) {
++	if (!detected) {
+ 		if (phy_deinit) {
+ 			msm_dp_aux_enable_xfers(priv->aux, false);
+ 			msm_dp_display_host_phy_exit(priv);
+-- 
+2.47.3
+

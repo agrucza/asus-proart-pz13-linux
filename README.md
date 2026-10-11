@@ -13,10 +13,11 @@ Windows ACPI dump (DSDT). Kernel: `jg/ubuntu-qcom-x1e-7.2.y` from
 | `dts/x1p42100-asus-proart-pz13.dts` | Board file: model, firmware paths, GPU, WLAN PMU, panel |
 | `dts/x1-asus-proart-pz13.dtsi` | Regulators (incl. PM8010 camera rails), USB, PCIe, I2C devices, pinctrl, display, audio, front and IR camera |
 | `ucm2/Qualcomm/x1e80100/` | UCM profile (alsa-ucm-conf) for the sound card: two `.conf` files plus `x1e80100.conf.patch` for the DMI dispatcher |
+| `audio/` | the audioreach topology description (m4) the sound card's topology binary is built from |
 | `install/` | systemd-boot entry, initramfs hook, keyboard backlight script, Fn-key daemon + unit, gnome-shell extension for locking on suspend, WirePlumber override that enables the libcamera monitor, libcamera tuning files for the OV5675 and OV13858, sleep hook that re-initialises the cover after resume |
 | `notes/cameras.md` | Camera sensors and their wiring, decoded from the Windows driver package |
 | `tools/` | `aeob-parse.py` (decoder for the Windows camera resource binaries), `pz13-dpdiag.sh` (USB-C/DisplayPort alt-mode state dump) |
-| `patches/` | Kernel patches on top of jglathe's `jg/ubuntu-qcom-x1e-7.2.y`: the HM1092 sensor driver + binding (v6 from linux-media), CSIPHY combo-mode support in camss/phy-qcom-mipi-csi2 (ours, needed for the IR camera), X1P42100 CAMSS support (Wenmeng Liu v3 from linux-media, needed because Purwa has no IFE1: with the X1E description every suspend/resume toggled a non-existent power domain), device-tree support for the OV13858 rear-camera driver (ours: supplies, reset line, OF match, binding), the PZ13 entry in the SCM driver's QSEECOM allow-list (ours; RTC and UEFI variables), and a HID battery quirk for the ELAN touch controller's bogus stylus battery (ours), and the panel's entry in the samsung,atna33xc20 binding (ours) |
+| `patches/` | Kernel patches on top of jglathe's `jg/ubuntu-qcom-x1e-7.2.y`: the HM1092 sensor driver + binding (v6 from linux-media), CSIPHY combo-mode support in camss/phy-qcom-mipi-csi2 (ours, needed for the IR camera), X1P42100 CAMSS support (Wenmeng Liu v3 from linux-media, needed because Purwa has no IFE1: with the X1E description every suspend/resume toggled a non-existent power domain), device-tree support for the OV13858 rear-camera driver (ours: supplies, reset line, OF match, binding), the PZ13 entry in the SCM driver's QSEECOM allow-list (ours; RTC and UEFI variables), and a HID battery quirk for the ELAN touch controller's bogus stylus battery (ours), the panel's entry in the samsung,atna33xc20 binding (ours), three msm DP changes (ours: audio PCMs can be opened without a monitor, no forced link retrain from the hot-plug handler, the connector probe leaves the hot-plug state alone; the last two fix a deadlock and a stale-port freeze, see `notes/dp-audio-hotplug.md`) and the upstream q6apm fix that keeps the DSP graph start count in sync (a refused start no longer leaves a silently dead stream) |
 
 Kernel integration: copy both DTS files to `arch/arm64/boot/dts/qcom/`, add
 `dtb-$(CONFIG_ARCH_QCOM) += x1p42100-asus-proart-pz13.dtb` to the `Makefile`, and the
@@ -39,7 +40,7 @@ appear identically on `x1e80100-crd.dtb`.
 | NVMe (pcie6a) | works |
 | WLAN WCN7850 (pcie4, ath12k) | works (NetworkManager); ath12k uses the generic board file, the ASUS variant is missing from linux-firmware |
 | Bluetooth (uart14) | works: the ASUS Pen pairs and connects (BLE), its battery service shows up in BlueZ and UPower |
-| USB-C ×2 (usb_1_ss0/ss1) incl. ps883x retimers | works (stick, LAN adapter, charger, SuperSpeed on both ports); DisplayPort alt mode works on both ports (passive USB-C→DP adapter, picture on the monitor; `tools/pz13-dpdiag.sh` shows the ADSP reporting the mode, the PHY switching to DP and `msm_dp_ctrl_setup_tr_unit` after link training); DP audio untested |
+| USB-C ×2 (usb_1_ss0/ss1) incl. ps883x retimers | works (stick, LAN adapter, charger, SuperSpeed on both ports); DisplayPort alt mode works on both ports (passive USB-C→DP adapter, picture on the monitor; `tools/pz13-dpdiag.sh` shows the ADSP reporting the mode, the PHY switching to DP and `msm_dp_ctrl_setup_tr_unit` after link training); DisplayPort audio: works on both ports with automatic switching and clean plug/unplug cycles, opt-in via `install/ucm-dp-audio.conf`, `install/wireplumber-20-dp-audio.conf` and the topology in `audio/`; one quirk: the DSP refuses the first start of port 0 after a boot, the first use needs the output switched to the speakers and back once (`notes/dp-audio-hotplug.md`) |
 | Keyboard cover (usb_mp, 0b05:1b6e) | keyboard, Caps LED, touchpad, mute/volume, display switch work natively; Fn+F4–F12 and the backlight via the userspace daemon `install/pz13-fnkeys.py`; Fn lock not available (see below) |
 | Touchscreen + pen (ELAN 04F3:430A, i2c8 @0x10, IRQ tlmm 51) | works, incl. stylus collection. The controller's stylus battery report is bogus (constant 1 % with the pen in range, also after hours of charging), so `patches/0008` ignores it like the Surface Pro 12's ELAN controller. The pen's real charge level comes over Bluetooth once the pen is paired (BLE battery service, shown by UPower and GNOME) |
 | EC HID (0B05:4543, i2c0 @0x17, IRQ tlmm 67) | bound (hidraw), hotkey events not decoded yet |
@@ -268,8 +269,8 @@ capture of the vendor feature reports:
 ## Open
 
 1. **Audio polish**: submit the topology line to audioreach-topology and the UCM profile to
-   alsa-ucm-conf; 4-channel capture (the topology currently allows 2); DP audio over USB-C
-   untested.
+   alsa-ucm-conf; 4-channel capture (the topology currently allows 2); the DisplayPort
+   port-0 first-start refusal (`notes/dp-audio-hotplug.md`) needs ADSP firmware knowledge.
 2. **Keyboard backlight / hotkeys in the kernel**: hid-asus has to coexist with the
    multitouch interface; the vendor code table above is what such support needs. Userspace
    daemon until then.
@@ -281,9 +282,11 @@ capture of the vendor feature reports:
    ov13858 driver's missing selection ioctls (libcamera warns about them), and
    upstreaming the combo-mode PHY support properly (a binding for it is under review on
    linux-media, ours is a submode hack). Sensor DSP and fan are separate topics.
-5. **DisplayPort alt mode**: works on both ports (see "What works"). Still open: DP audio, and the harmless
-   boot-time `msm_dp_display_probe: init sub module failed` from one controller that binds a
-   second later.
+5. **DisplayPort alt mode**: works on both ports (see "What works"). Open: DisplayPort
+   audio is opt-in only because the DP driver's hot-plug path deadlocks under audio use
+   (`notes/dp-audio-hotplug.md`, to be reported to the kernel branch's author); and the
+   harmless boot-time `msm_dp_display_probe: init sub module failed` from one controller
+   that binds a second later.
 6. **Upstream**: QREF/l3j report to linux-arm-msm; DTS to jglathe and upstream.
 7. **Cover USB port after the keyboard's firmware reset** (see "What works"): solved by not using USB wakeup
    on `usb_mp`; the kernel-side weakness (xhci/dwc3-qcom not recovering a port whose device
@@ -292,11 +295,13 @@ capture of the vendor feature reports:
    (PTN3222 at 0x43 and 0x4f on the EC's I2C bus, resets TLMM 6 and 184, taken from the
    `\_SB.USB3` resources); they probe but did not change this behaviour. Which repeater
    serves which port is unverified (Zenbook mapping assumed).
-8. **Suspend/resume leftovers**: the mutter 48 stall (no frame progress while the display is
+8. **Fan**: the tablet has a fan that is not described or controlled yet (ACPI/EC side
+   unknown); check whether the EC runs it on its own and how Windows reads its speed.
+9. **Suspend/resume leftovers**: the mutter 48 stall (no frame progress while the display is
    off, see "What works") is worked around by the gnome-shell extension and should be
    reported upstream with the evidence. No alarm wake: the PMIC RTC's alarm is owned by
    the ADSP (`qcom,no-alarm`).
-9. **Panel**: described with the dedicated `samsung,atna33xc20` driver and the PMIC enable
+10. **Panel**: described with the dedicated `samsung,atna33xc20` driver and the PMIC enable
    line like the sibling ASUS boards (`patches/0009` adds `samsung,atna33aa08` to the
    binding). Measured with the DisplayPort driver's debug log, a power-save off/on cycle
    brings the link up 0.24 s after the request with either description: the DP driver keeps
