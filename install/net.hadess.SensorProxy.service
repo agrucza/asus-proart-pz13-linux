@@ -1,0 +1,8 @@
+# D-Bus activation of net.hadess.SensorProxy: start our daemon instead of
+# iio-sensor-proxy (this file in /usr/local/share/dbus-1/system-services/
+# takes precedence over the one in /usr/share).
+[D-BUS Service]
+Name=net.hadess.SensorProxy
+Exec=/bin/false
+User=root
+SystemdService=pz13-sensor-proxy.service

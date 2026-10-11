@@ -1,0 +1,21 @@
+[Unit]
+Description=SensorProxy for the ProArt PZ13 accelerometer (Qualcomm Sensor Core)
+Documentation=file:///usr/share/doc/asus-proart-pz13/notes/sensors.md
+After=dbus.service
+
+[Service]
+Type=dbus
+BusName=net.hadess.SensorProxy
+ExecStart=/usr/local/bin/pz13-sensor-proxy
+Restart=on-failure
+RestartSec=5
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_UNIX AF_QIPCRTR
+NoNewPrivileges=yes
+
+[Install]
+WantedBy=multi-user.target

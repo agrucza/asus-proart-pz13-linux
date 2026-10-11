@@ -14,11 +14,12 @@ Windows ACPI dump (DSDT). Kernel: `jg/ubuntu-qcom-x1e-7.2.y` from
 | `dts/x1-asus-proart-pz13.dtsi` | Regulators (incl. PM8010 camera rails), USB, PCIe, I2C devices, pinctrl, display, audio, front and IR camera |
 | `ucm2/Qualcomm/x1e80100/` | UCM profile (alsa-ucm-conf) for the sound card: two `.conf` files plus `x1e80100.conf.patch` for the DMI dispatcher |
 | `audio/` | the audioreach topology description (m4) the sound card's topology binary is built from |
-| `install/` | systemd-boot entry, initramfs hook, keyboard backlight script, Fn-key daemon + unit, gnome-shell extension for locking on suspend, WirePlumber override that enables the libcamera monitor, libcamera tuning files for the OV5675 and OV13858, sleep hook that re-initialises the cover after resume |
+| `install/` | systemd-boot entry, initramfs hook, keyboard backlight script, Fn-key daemon + unit, gnome-shell extension for locking on suspend, WirePlumber override that enables the libcamera monitor, libcamera tuning files for the OV5675 and OV13858, sleep hook that re-initialises the cover after resume, SensorProxy daemon for the accelerometer with its unit and D-Bus activation file |
 | `notes/cameras.md` | Camera sensors and their wiring, decoded from the Windows driver package |
 | `notes/ec.md` | The ASUS embedded controller: register protocol, command interface, mailbox, how the fan is driven |
+| `notes/sensors.md` | The Qualcomm Sensor Core: what sensors exist, the configuration it needs from the OS, the QMI protocol, the SensorProxy daemon |
 | `notes/dp-audio-hotplug.md` | DisplayPort audio: what works, the driver fixes behind it, the open port-0 quirk |
-| `tools/` | `aeob-parse.py` (decoder for the Windows camera resource binaries), `pz13-dpdiag.sh` (USB-C/DisplayPort alt-mode state dump) |
+| `tools/` | `aeob-parse.py` (decoder for the Windows camera resource binaries), `pz13-dpdiag.sh` (USB-C/DisplayPort alt-mode state dump), `pz13-ssc-probe.py` (lists and streams the sensor core's sensors over QMI), `pz13-sns-config.sh` (builds the sensor-core configuration tree from the Windows driver package) |
 | `patches/` | Kernel patches on top of jglathe's `jg/ubuntu-qcom-x1e-7.2.y`: the HM1092 sensor driver + binding (v6 from linux-media), CSIPHY combo-mode support in camss/phy-qcom-mipi-csi2 (ours, needed for the IR camera), X1P42100 CAMSS support (Wenmeng Liu v3 from linux-media, needed because Purwa has no IFE1: with the X1E description every suspend/resume toggled a non-existent power domain), device-tree support for the OV13858 rear-camera driver (ours: supplies, reset line, OF match, binding), the PZ13 entry in the SCM driver's QSEECOM allow-list (ours; RTC and UEFI variables), and a HID battery quirk for the ELAN touch controller's bogus stylus battery (ours), the panel's entry in the samsung,atna33xc20 binding (ours), three msm DP changes (ours: audio PCMs can be opened without a monitor, no forced link retrain from the hot-plug handler, the connector probe leaves the hot-plug state alone; the last two fix a deadlock and a stale-port freeze, see `notes/dp-audio-hotplug.md`), the upstream q6apm fix that keeps the DSP graph start count in sync (a refused start no longer leaves a silently dead stream), and the EC driver that feeds the fan (ours, with binding) |
 
 Kernel integration: copy both DTS files to `arch/arm64/boot/dts/qcom/`, add
@@ -57,7 +58,7 @@ appear identically on `x1e80100-crd.dtb`.
 | IR camera (HM1092, cci0_i2c1 @0x24, MCLK1, reset tlmm 111, csiphy4 lane 2 in combo mode with the RGB sensor) | streams: `cam -s role=raw` delivers 560×360 10-bit mono at 29.7 fps and the frame shows the room in near-infrared. Needs the kernel patches in `patches/` (HM1092 driver from linux-media + CSIPHY combo-mode support). Image is only ambient IR: the PM8550 illuminator is not wired up yet |
 | Rear camera (OV13858, cci0_i2c0 @0x36, csiphy0 4 lanes, MCLK0, reset tlmm 109) | works: libcamera lists "Internal back camera", `cam` streams 640×480 at 30 fps and the frames show the room (exposure settles within a few dozen frames; colours flat without a tuning file); GNOME Snapshot switches between front and rear camera (WirePlumber rule names it "PZ13 rear camera", the front camera stays the default). Needs `patches/0006` (device-tree support for the ov13858 driver: supplies, reset, OF match). Sensor rails PM8550 LDO7 (AVDD), PM8010 LDO2 (DVDD) and LDO6 (DOVDD); the sensor only answers while PM8010 LDO4 (the IR camera's I/O rail) is on as well, so that rail is always-on. Focus motor DW9714 @0x0c (PM8010 LDO5, `lens-focus` of the sensor, ancillary link present in the media graph) and the module EEPROM 24c64 @0x50 (PM8010 LDO6, reads as empty apart from a 4-byte header) are described; the motor works (`v4l2-ctl -d <lens subdev> --set-ctrl=focus_absolute=0..1023`, verified by sharpness at 0 vs 1000) but libcamera's software-ISP pipeline has no autofocus and does not expose the lens, so focus is manual via V4L2 for now (the lens keeps its last position across streams; 0 = infinity). `install/libcamera-ov13858.yaml` (Qualcomm's CC13 matrices from `com.qti.tuned.ov13858.bin`, same decoding as for the front camera) gives stronger, more plausible colours; with the software ISP's lack of highlight handling, clipped highlights turn magenta under artificial light |
 | Fan (ASUS EC, i2c5 @0x5b) | works with `patches/0014`: the EC runs the fan at a speed following a SoC temperature the OS reports to it (as the ASUS software does on Windows); the driver reports the hottest CPU/GPU sensor once a second, the fan is slow at idle (about 1500 rpm at 33 °C), 3600 rpm with all cores loaded, off in suspend. Fan speed, the EC's two sensors and the reported temperature in hwmon `pz13_ec`; protocol in `notes/ec.md` |
-| Sensor DSP | not implemented |
+| Motion sensors (Bosch BMI3x0 IMU on the Qualcomm Sensor Core in the ADSP) | accelerometer works: screen rotation follows the tablet in GNOME. The sensor core needs its configuration served over FastRPC (the Windows `qcsensorsconfigcrd8380` package, built into the served tree with `tools/pz13-sns-config.sh`, served by the sl7-sensors package's `adsprpcd`) and `install/pz13-sensor-proxy` provides `net.hadess.SensorProxy` from the core's QMI stream. Gyroscope and motion detection exist on the core but are not exposed; no light, proximity or magnetic sensor on this machine. Details in `notes/sensors.md` |
 
 Kernel parameters: `consoleblank=0 clk_ignore_unused pd_ignore_unused arm64.nopauth`.
 The `*_unused`/`nopauth` parameters are the usual bring-up parameters on this platform (as in
@@ -269,6 +270,18 @@ capture of the vendor feature reports:
   The matrices in it are Qualcomm's own CC13 tuning for this module, decoded from
   `com.qti.tuned.ov5675.bin` in the Windows camera package.
 
+- Sensors (screen rotation): the accelerometer lives on the ADSP's sensor core, which needs
+  its configuration served from the host (`notes/sensors.md`). Install the
+  [sl7-sensors](https://github.com/valeronm/sl7-sensors) deb for its FastRPC file service
+  and disable its own proxy (`systemctl disable --now sl7-sensor-proxy.service`), build the
+  configuration tree from the Windows package with `tools/pz13-sns-config.sh
+  <DriverStore/FileRepository/qcsensorsconfigcrd8380.inf_arm64_*> sns-config` and put it at
+  `/var/lib/sl7-sensors/sns-config`; `sl7-sensors.service` starts by udev when the ADSP
+  appears. Then `install/pz13-sensor-proxy` → `/usr/local/bin/`, its `.service` →
+  `/etc/systemd/system/` (enable it), `install/net.hadess.SensorProxy.service` →
+  `/usr/local/share/dbus-1/system-services/`. `tools/pz13-ssc-probe.py` shows what the core
+  offers.
+
 ## Open
 
 1. **Audio polish**: submit the topology line to audioreach-topology and the UCM profile to
@@ -284,7 +297,7 @@ capture of the vendor feature reports:
    for the HM1092 and the OV13858, the rear camera's focus motor and EEPROM nodes, the
    ov13858 driver's missing selection ioctls (libcamera warns about them), and
    upstreaming the combo-mode PHY support properly (a binding for it is under review on
-   linux-media, ours is a submode hack). The sensor DSP is a separate topic.
+   linux-media, ours is a submode hack).
 5. **DisplayPort alt mode**: works on both ports (see "What works"). Open: DisplayPort
    audio stays opt-in because the DSP refuses the first start of port 0 after a boot
    (`notes/dp-audio-hotplug.md`); and the harmless boot-time `msm_dp_display_probe: init
