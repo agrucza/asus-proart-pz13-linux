@@ -16,13 +16,16 @@ Windows ACPI dump (DSDT). Kernel: `jg/ubuntu-qcom-x1e-7.2.y` from
 | `audio/` | the audioreach topology description (m4) the sound card's topology binary is built from |
 | `install/` | systemd-boot entry, initramfs hook, keyboard backlight script, Fn-key daemon + unit, gnome-shell extension for locking on suspend, WirePlumber override that enables the libcamera monitor, libcamera tuning files for the OV5675 and OV13858, sleep hook that re-initialises the cover after resume |
 | `notes/cameras.md` | Camera sensors and their wiring, decoded from the Windows driver package |
+| `notes/ec.md` | The ASUS embedded controller: register protocol, command interface, mailbox, how the fan is driven |
+| `notes/dp-audio-hotplug.md` | DisplayPort audio: what works, the driver fixes behind it, the open port-0 quirk |
 | `tools/` | `aeob-parse.py` (decoder for the Windows camera resource binaries), `pz13-dpdiag.sh` (USB-C/DisplayPort alt-mode state dump) |
-| `patches/` | Kernel patches on top of jglathe's `jg/ubuntu-qcom-x1e-7.2.y`: the HM1092 sensor driver + binding (v6 from linux-media), CSIPHY combo-mode support in camss/phy-qcom-mipi-csi2 (ours, needed for the IR camera), X1P42100 CAMSS support (Wenmeng Liu v3 from linux-media, needed because Purwa has no IFE1: with the X1E description every suspend/resume toggled a non-existent power domain), device-tree support for the OV13858 rear-camera driver (ours: supplies, reset line, OF match, binding), the PZ13 entry in the SCM driver's QSEECOM allow-list (ours; RTC and UEFI variables), and a HID battery quirk for the ELAN touch controller's bogus stylus battery (ours), the panel's entry in the samsung,atna33xc20 binding (ours), three msm DP changes (ours: audio PCMs can be opened without a monitor, no forced link retrain from the hot-plug handler, the connector probe leaves the hot-plug state alone; the last two fix a deadlock and a stale-port freeze, see `notes/dp-audio-hotplug.md`) and the upstream q6apm fix that keeps the DSP graph start count in sync (a refused start no longer leaves a silently dead stream) |
+| `patches/` | Kernel patches on top of jglathe's `jg/ubuntu-qcom-x1e-7.2.y`: the HM1092 sensor driver + binding (v6 from linux-media), CSIPHY combo-mode support in camss/phy-qcom-mipi-csi2 (ours, needed for the IR camera), X1P42100 CAMSS support (Wenmeng Liu v3 from linux-media, needed because Purwa has no IFE1: with the X1E description every suspend/resume toggled a non-existent power domain), device-tree support for the OV13858 rear-camera driver (ours: supplies, reset line, OF match, binding), the PZ13 entry in the SCM driver's QSEECOM allow-list (ours; RTC and UEFI variables), and a HID battery quirk for the ELAN touch controller's bogus stylus battery (ours), the panel's entry in the samsung,atna33xc20 binding (ours), three msm DP changes (ours: audio PCMs can be opened without a monitor, no forced link retrain from the hot-plug handler, the connector probe leaves the hot-plug state alone; the last two fix a deadlock and a stale-port freeze, see `notes/dp-audio-hotplug.md`), the upstream q6apm fix that keeps the DSP graph start count in sync (a refused start no longer leaves a silently dead stream), and the EC driver that feeds the fan (ours, with binding) |
 
 Kernel integration: copy both DTS files to `arch/arm64/boot/dts/qcom/`, add
 `dtb-$(CONFIG_ARCH_QCOM) += x1p42100-asus-proart-pz13.dtb` to the `Makefile`, and the
 compatible `asus,proart-pz13-ht5306qa` to `Documentation/devicetree/bindings/arm/qcom.yaml`.
-For the cameras apply `patches/*.patch` (`git am`) and set `CONFIG_VIDEO_HM1092=m`.
+Apply `patches/*.patch` (`git am`) and set `CONFIG_VIDEO_HM1092=m` (IR camera) and
+`CONFIG_EC_ASUS_PROART_PZ13=m` (fan).
 
 Schema check (dt-schema 2026.9, jglathe 7.2.5 tree): `make CHECK_DTBS=y W=1
 qcom/x1p42100-asus-proart-pz13.dtb` reports nothing from our two files and no dtc warnings;
@@ -53,8 +56,8 @@ appear identically on `x1e80100-crd.dtb`.
 | Front camera (OV5675, cci1_i2c1 @0x36, csiphy4, MCLK4, PM8010 rails) | works: libcamera lists "Internal front camera", `cam` streams 640×480 at 30 fps, GNOME Snapshot shows the live preview, and with libcamera 0.7.1 from trixie-backports plus `install/libcamera-ov5675.yaml` (Qualcomm's own colour matrices) the picture has correct exposure and plausible colours. Full-resolution `cam` output fails to allocate its buffers from the default 128 MB CMA pool (`cma=256M` on the command line should fix it, untested). Needs the WirePlumber override from `install/` (see Installation). Wiring derived from the Windows package, see `notes/cameras.md` |
 | IR camera (HM1092, cci0_i2c1 @0x24, MCLK1, reset tlmm 111, csiphy4 lane 2 in combo mode with the RGB sensor) | streams: `cam -s role=raw` delivers 560×360 10-bit mono at 29.7 fps and the frame shows the room in near-infrared. Needs the kernel patches in `patches/` (HM1092 driver from linux-media + CSIPHY combo-mode support). Image is only ambient IR: the PM8550 illuminator is not wired up yet |
 | Rear camera (OV13858, cci0_i2c0 @0x36, csiphy0 4 lanes, MCLK0, reset tlmm 109) | works: libcamera lists "Internal back camera", `cam` streams 640×480 at 30 fps and the frames show the room (exposure settles within a few dozen frames; colours flat without a tuning file); GNOME Snapshot switches between front and rear camera (WirePlumber rule names it "PZ13 rear camera", the front camera stays the default). Needs `patches/0006` (device-tree support for the ov13858 driver: supplies, reset, OF match). Sensor rails PM8550 LDO7 (AVDD), PM8010 LDO2 (DVDD) and LDO6 (DOVDD); the sensor only answers while PM8010 LDO4 (the IR camera's I/O rail) is on as well, so that rail is always-on. Focus motor DW9714 @0x0c (PM8010 LDO5, `lens-focus` of the sensor, ancillary link present in the media graph) and the module EEPROM 24c64 @0x50 (PM8010 LDO6, reads as empty apart from a 4-byte header) are described; the motor works (`v4l2-ctl -d <lens subdev> --set-ctrl=focus_absolute=0..1023`, verified by sharpness at 0 vs 1000) but libcamera's software-ISP pipeline has no autofocus and does not expose the lens, so focus is manual via V4L2 for now (the lens keeps its last position across streams; 0 = infinity). `install/libcamera-ov13858.yaml` (Qualcomm's CC13 matrices from `com.qti.tuned.ov13858.bin`, same decoding as for the front camera) gives stronger, more plausible colours; with the software ISP's lack of highlight handling, clipped highlights turn magenta under artificial light |
-| Rear camera (OV13858) | not started; wiring known (`notes/cameras.md`), the mainline driver has no regulator support |
-| Sensor DSP, fan control | not implemented |
+| Fan (ASUS EC, i2c5 @0x5b) | works with `patches/0014`: the EC runs the fan at a speed following a SoC temperature the OS reports to it (as the ASUS software does on Windows); the driver reports the hottest CPU/GPU sensor once a second, the fan is slow at idle (about 1500 rpm at 33 °C), 3600 rpm with all cores loaded, off in suspend. Fan speed, the EC's two sensors and the reported temperature in hwmon `pz13_ec`; protocol in `notes/ec.md` |
+| Sensor DSP | not implemented |
 
 Kernel parameters: `consoleblank=0 clk_ignore_unused pd_ignore_unused arm64.nopauth`.
 The `*_unused`/`nopauth` parameters are the usual bring-up parameters on this platform (as in
@@ -69,7 +72,7 @@ consumer or is `always-on`.
 |-------|--------------|---------|--------|
 | i2c8 | I2C9 / QUP_1_SE_0 | 0x00a80000 | ELAN9008 touchscreen @0x10 (HID descriptor 0x0001) |
 | i2c0 | I2C1 / QUP_0_SE_0 | 0x00b80000 | ASUS EC HID (QTEC0001) @0x17 |
-| i2c5 | I2C6 / QUP_0_SE_5 | 0x00b94000 | ASUS EC @0x5B (confirmed with i2cdetect), second device @0x76 |
+| i2c5 | I2C6 / QUP_0_SE_5 | 0x00b94000 | ASUS EC @0x5B (driver `patches/0014`, `notes/ec.md`), second device @0x76 |
 | i2c3 / i2c7 | I2C4 / I2C8 | 0x00b8c000 / 0x00b9c000 | USB-C retimers ps8833 @0x08 (as on the Zenbook) |
 | uart21 | \_SB.UARD | 0x00894000 | debug UART per DSDT; unused (no access) |
 | tlmm 18 | – | – | enable for `VREG_NVME_3P3` (DSDT: TLMMGPIO 0x12 in the PCIe 6a power-up) |
@@ -86,10 +89,10 @@ PCIe supplies per the Windows PEP tables (match the DTS): pcie6a `LDO2_J` 1.256 
 `LDO1_D` 0.88 V, `LDO3_J` 0.88 V, GPIO 18; pcie4 `LDO3_E` 1.2 V, `LDO3_I` 0.88 V, `LDO3_J`,
 `CLK7_A` (= `RPMH_LN_BB_CLK2`, WCN7850 reference clock; not referenced in the DTS yet).
 
-EC protocol (for a future driver): i2c5 @0x5B, 6-byte command to reg 0x10, 3-byte reply from
-reg 0x11; bank 0xC9 reg 0x6E/0x6F = mailbox, bank 0xC4 reg 0x4F = hotkey event. Battery and
-charging go through pmic_glink (ADSP) as on the Zenbook, not through the EC. The EC firmware
-identifies itself as `F01740D4.HT5306QA.312` (UEFI variable `AsusEcVersion`).
+EC: i2c5 @0x5B, register pages reached through a two-step protocol (`notes/ec.md` has the
+map, the command interface, the mailbox and the fan behaviour). Battery and charging go
+through pmic_glink (ADSP) as on the Zenbook, not through the EC. The EC firmware identifies
+itself as `F01740D4.HT5306QA.312` (UEFI variable `AsusEcVersion`).
 
 ## Differences from the Zenbook A14 (and why)
 
@@ -281,12 +284,11 @@ capture of the vendor feature reports:
    for the HM1092 and the OV13858, the rear camera's focus motor and EEPROM nodes, the
    ov13858 driver's missing selection ioctls (libcamera warns about them), and
    upstreaming the combo-mode PHY support properly (a binding for it is under review on
-   linux-media, ours is a submode hack). Sensor DSP and fan are separate topics.
+   linux-media, ours is a submode hack). The sensor DSP is a separate topic.
 5. **DisplayPort alt mode**: works on both ports (see "What works"). Open: DisplayPort
-   audio is opt-in only because the DP driver's hot-plug path deadlocks under audio use
-   (`notes/dp-audio-hotplug.md`, to be reported to the kernel branch's author); and the
-   harmless boot-time `msm_dp_display_probe: init sub module failed` from one controller
-   that binds a second later.
+   audio stays opt-in because the DSP refuses the first start of port 0 after a boot
+   (`notes/dp-audio-hotplug.md`); and the harmless boot-time `msm_dp_display_probe: init
+   sub module failed` from one controller that binds a second later.
 6. **Upstream**: QREF/l3j report to linux-arm-msm; DTS to jglathe and upstream.
 7. **Cover USB port after the keyboard's firmware reset** (see "What works"): solved by not using USB wakeup
    on `usb_mp`; the kernel-side weakness (xhci/dwc3-qcom not recovering a port whose device
@@ -295,13 +297,11 @@ capture of the vendor feature reports:
    (PTN3222 at 0x43 and 0x4f on the EC's I2C bus, resets TLMM 6 and 184, taken from the
    `\_SB.USB3` resources); they probe but did not change this behaviour. Which repeater
    serves which port is unverified (Zenbook mapping assumed).
-8. **Fan**: the tablet has a fan that is not described or controlled yet (ACPI/EC side
-   unknown); check whether the EC runs it on its own and how Windows reads its speed.
-9. **Suspend/resume leftovers**: the mutter 48 stall (no frame progress while the display is
+8. **Suspend/resume leftovers**: the mutter 48 stall (no frame progress while the display is
    off, see "What works") is worked around by the gnome-shell extension and should be
    reported upstream with the evidence. No alarm wake: the PMIC RTC's alarm is owned by
    the ADSP (`qcom,no-alarm`).
-10. **Panel**: described with the dedicated `samsung,atna33xc20` driver and the PMIC enable
+9. **Panel**: described with the dedicated `samsung,atna33xc20` driver and the PMIC enable
    line like the sibling ASUS boards (`patches/0009` adds `samsung,atna33aa08` to the
    binding). Measured with the DisplayPort driver's debug log, a power-save off/on cycle
    brings the link up 0.24 s after the request with either description: the DP driver keeps

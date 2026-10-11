@@ -1297,7 +1297,20 @@
 		pinctrl-names = "default";
 	};
 
-	/* EC @0x5b and @0x76 (ACPI I2C6); no Linux driver yet */
+	/*
+	 * ASUS embedded controller (ACPI \_SB.I2C6, "Asus_plat_ec.asl"): fan,
+	 * EC temperature sensors, battery charge mode. It runs the fan from a
+	 * SoC temperature the OS reports to it.
+	 */
+	ec: embedded-controller@5b {
+		compatible = "asus,proart-pz13-ec";
+		reg = <0x5b>;
+		/* The SoC sensors whose hottest reading the EC runs the fan on */
+		asus,thermal-zones = <&cpu0_0_top>, <&cpu0_1_top>, <&cpu0_2_top>, <&cpu0_3_top>,
+				     <&cpu1_0_top>, <&cpu1_1_top>, <&cpu1_2_top>, <&cpu1_3_top>,
+				     <&thermal_gpuss_0>, <&thermal_gpuss_1>,
+				     <&thermal_gpuss_2>, <&thermal_gpuss_3>;
+	};
 };
 
 /*
@@ -1991,3 +2004,13 @@
 &usb_mp_qmpphy1 {
 	status = "disabled";
 };
+
+/* Labels for the SoC's unlabelled CPU core zones, for the EC's zone list */
+cpu0_0_top: &{/thermal-zones/cpu0-0-top-thermal} {};
+cpu0_1_top: &{/thermal-zones/cpu0-1-top-thermal} {};
+cpu0_2_top: &{/thermal-zones/cpu0-2-top-thermal} {};
+cpu0_3_top: &{/thermal-zones/cpu0-3-top-thermal} {};
+cpu1_0_top: &{/thermal-zones/cpu1-0-top-thermal} {};
+cpu1_1_top: &{/thermal-zones/cpu1-1-top-thermal} {};
+cpu1_2_top: &{/thermal-zones/cpu1-2-top-thermal} {};
+cpu1_3_top: &{/thermal-zones/cpu1-3-top-thermal} {};
