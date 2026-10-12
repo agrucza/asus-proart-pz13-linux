@@ -1,0 +1,113 @@
+From 156473647f53520b76c0b6e08b50f2ddb575093b Mon Sep 17 00:00:00 2001
+From: agrucza <a.grucza@gmx.net>
+Date: Mon, 12 Oct 2026 08:27:08 +0200
+Subject: [PATCH] leds: uleds: let userspace report brightness changes it made
+ itself
+
+A userspace LED can stand for hardware whose brightness is also changed
+outside the LED class device, typically a keyboard backlight with a hotkey
+that the same program handles. Such a change cannot be reported today: a
+write to the open file handle after registration fails with -EBUSY, and a
+write to the sysfs brightness attribute comes back to the program as new
+data to read, as if a trigger or a user had set the LED. Consumers such as
+UPower learn about changes made by the hardware from brightness_hw_changed.
+
+Accept an int on the file handle once the device is registered: take it as
+the current brightness without signalling new data to the reader, and
+notify brightness_hw_changed as a hardware driver does. Advertise
+LED_BRIGHT_HW_CHANGED so that the attribute exists, and provide
+brightness_get so that the sysfs brightness attribute reflects the reported
+value.
+---
+ Documentation/leds/uleds.rst |  9 ++++++++
+ drivers/leds/uleds.c         | 40 +++++++++++++++++++++++++++++++++++-
+ 2 files changed, 48 insertions(+), 1 deletion(-)
+
+diff --git a/Documentation/leds/uleds.rst b/Documentation/leds/uleds.rst
+index 83221098009c..4c734b826934 100644
+--- a/Documentation/leds/uleds.rst
++++ b/Documentation/leds/uleds.rst
+@@ -28,6 +28,15 @@ device. Values are unsigned: 0 to 255. Reading will block until the brightness
+ changes. The device node can also be polled to notify when the brightness value
+ changes.
+ 
++A userspace LED may stand for hardware whose brightness is also changed
++outside the LED class device, for example a keyboard backlight with a hotkey
++that the same program handles. Once the device is registered, writing a
++brightness value (an int, the same format that is read from the device) to the
++file handle sets the current brightness without producing new data to read,
++and notifies the brightness_hw_changed sysfs attribute as a hardware driver
++does with led_classdev_notify_brightness_hw_changed(). Values outside
++0 to max_brightness are rejected with EINVAL.
++
+ The LED class device will be removed when the open file handle to /dev/uleds
+ is closed.
+ 
+diff --git a/drivers/leds/uleds.c b/drivers/leds/uleds.c
+index 6affa581b61d..b8fabb91c821 100644
+--- a/drivers/leds/uleds.c
++++ b/drivers/leds/uleds.c
+@@ -49,6 +49,14 @@ static void uleds_brightness_set(struct led_classdev *led_cdev,
+ 	}
+ }
+ 
++static enum led_brightness uleds_brightness_get(struct led_classdev *led_cdev)
++{
++	struct uleds_device *udev = container_of(led_cdev, struct uleds_device,
++						 led_cdev);
++
++	return udev->brightness;
++}
++
+ static int uleds_open(struct inode *inode, struct file *file)
+ {
+ 	struct uleds_device *udev;
+@@ -59,6 +67,8 @@ static int uleds_open(struct inode *inode, struct file *file)
+ 
+ 	udev->led_cdev.name = udev->user_dev.name;
+ 	udev->led_cdev.brightness_set = uleds_brightness_set;
++	udev->led_cdev.brightness_get = uleds_brightness_get;
++	udev->led_cdev.flags = LED_BRIGHT_HW_CHANGED;
+ 
+ 	mutex_init(&udev->mutex);
+ 	init_waitqueue_head(&udev->waitq);
+@@ -85,7 +95,35 @@ static ssize_t uleds_write(struct file *file, const char __user *buffer,
+ 		return ret;
+ 
+ 	if (udev->state == ULEDS_STATE_REGISTERED) {
+-		ret = -EBUSY;
++		/*
++		 * The LED is registered: userspace reports a brightness it has
++		 * set itself (a hardware change from the LED class' point of
++		 * view). Take it as the current brightness without signalling
++		 * new data to the reader, and notify brightness_hw_changed.
++		 */
++		int brightness;
++
++		if (count != sizeof(brightness)) {
++			ret = -EINVAL;
++			goto out;
++		}
++
++		if (copy_from_user(&brightness, buffer, sizeof(brightness))) {
++			ret = -EFAULT;
++			goto out;
++		}
++
++		if (brightness < 0 ||
++		    brightness > udev->led_cdev.max_brightness) {
++			ret = -EINVAL;
++			goto out;
++		}
++
++		udev->brightness = brightness;
++		udev->led_cdev.brightness = brightness;
++		led_classdev_notify_brightness_hw_changed(&udev->led_cdev,
++							  brightness);
++		ret = count;
+ 		goto out;
+ 	}
+ 
+-- 
+2.47.3
+

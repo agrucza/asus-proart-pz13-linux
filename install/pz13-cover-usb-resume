@@ -1,9 +1,10 @@
 #!/bin/sh
 # systemd-sleep hook (/usr/lib/systemd/system-sleep/): after resume, re-send the
-# keyboard cover's backlight feature report once the cover has re-enumerated.
+# keyboard cover's backlight feature report once the cover has re-enumerated
+# (the level is the LED class device the Fn daemon provides).
 # The wait runs in a transient unit so that this hook returns at once: logind
 # only reports the resume to the desktop after all sleep hooks have finished.
 [ "$1" = "post" ] || exit 0
 systemd-run --quiet --no-block --collect sh -c \
-  'sleep 3; /usr/local/bin/kbdlight "$(cat /run/pz13-kbdlight.level 2>/dev/null || echo 1)"'
+  'sleep 3; /usr/local/bin/kbdlight "$(cat /sys/class/leds/asus::kbd_backlight/brightness 2>/dev/null || echo 1)"'
 exit 0

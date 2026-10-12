@@ -14,19 +14,20 @@ Windows ACPI dump (DSDT). Kernel: `jg/ubuntu-qcom-x1e-7.2.y` from
 | `dts/x1-asus-proart-pz13.dtsi` | Regulators (incl. PM8010 camera rails), USB, PCIe, I2C devices, pinctrl, display, audio, front and IR camera |
 | `ucm2/Qualcomm/x1e80100/` | UCM profile (alsa-ucm-conf) for the sound card: two `.conf` files plus `x1e80100.conf.patch` for the DMI dispatcher |
 | `audio/` | the audioreach topology description (m4) the sound card's topology binary is built from |
-| `install/` | systemd-boot entry, initramfs hook, keyboard backlight script, Fn-key daemon + unit, gnome-shell extension for locking on suspend, WirePlumber override that enables the libcamera monitor, libcamera tuning files for the OV5675 and OV13858, sleep hook that re-initialises the cover after resume, SensorProxy daemon for the accelerometer with its unit and D-Bus activation file |
+| `install/` | systemd-boot entry, initramfs hook, keyboard backlight script, Fn-key daemon + unit (the daemon also provides the backlight LED), gnome-shell extension for locking on suspend, WirePlumber override that enables the libcamera monitor, libcamera tuning files for the OV5675 and OV13858, sleep hook that re-initialises the cover after resume, SensorProxy daemon for the accelerometer with its unit and D-Bus activation file |
 | `notes/cameras.md` | Camera sensors and their wiring, decoded from the Windows driver package |
 | `notes/ec.md` | The ASUS embedded controller: register protocol, command interface, mailbox, how the fan is driven |
 | `notes/sensors.md` | The Qualcomm Sensor Core: what sensors exist, the configuration it needs from the OS, the QMI protocol, the SensorProxy daemon |
 | `notes/dp-audio-hotplug.md` | DisplayPort audio: what works, the driver fixes behind it, the open port-0 quirk |
 | `tools/` | `aeob-parse.py` (decoder for the Windows camera resource binaries), `pz13-dpdiag.sh` (USB-C/DisplayPort alt-mode state dump), `pz13-ssc-probe.py` (lists and streams the sensor core's sensors over QMI), `pz13-sns-config.sh` (builds the sensor-core configuration tree from the Windows driver package) |
-| `patches/` | Kernel patches on top of jglathe's `jg/ubuntu-qcom-x1e-7.2.y`: the HM1092 sensor driver + binding (v6 from linux-media), CSIPHY combo-mode support in camss/phy-qcom-mipi-csi2 (ours, needed for the IR camera), X1P42100 CAMSS support (Wenmeng Liu v3 from linux-media, needed because Purwa has no IFE1: with the X1E description every suspend/resume toggled a non-existent power domain), device-tree support for the OV13858 rear-camera driver (ours: supplies, reset line, OF match, binding), the PZ13 entry in the SCM driver's QSEECOM allow-list (ours; RTC and UEFI variables), and a HID battery quirk for the ELAN touch controller's bogus stylus battery (ours), the panel's entry in the samsung,atna33xc20 binding (ours), three msm DP changes (ours: audio PCMs can be opened without a monitor, no forced link retrain from the hot-plug handler, the connector probe leaves the hot-plug state alone; the last two fix a deadlock and a stale-port freeze, see `notes/dp-audio-hotplug.md`), the upstream q6apm fix that keeps the DSP graph start count in sync (a refused start no longer leaves a silently dead stream), and the EC driver that feeds the fan (ours, with binding) |
+| `patches/` | Kernel patches on top of jglathe's `jg/ubuntu-qcom-x1e-7.2.y`: the HM1092 sensor driver + binding (v6 from linux-media), CSIPHY combo-mode support in camss/phy-qcom-mipi-csi2 (ours, needed for the IR camera), X1P42100 CAMSS support (Wenmeng Liu v3 from linux-media, needed because Purwa has no IFE1: with the X1E description every suspend/resume toggled a non-existent power domain), device-tree support for the OV13858 rear-camera driver (ours: supplies, reset line, OF match, binding), the PZ13 entry in the SCM driver's QSEECOM allow-list (ours; RTC and UEFI variables), and a HID battery quirk for the ELAN touch controller's bogus stylus battery (ours), the panel's entry in the samsung,atna33xc20 binding (ours), three msm DP changes (ours: audio PCMs can be opened without a monitor, no forced link retrain from the hot-plug handler, the connector probe leaves the hot-plug state alone; the last two fix a deadlock and a stale-port freeze, see `notes/dp-audio-hotplug.md`), the upstream q6apm fix that keeps the DSP graph start count in sync (a refused start no longer leaves a silently dead stream), the EC driver that feeds the fan (ours, with binding), and a uleds extension that lets a userspace LED report brightness changes it made itself via `brightness_hw_changed` (ours; keyboard backlight cycle on Fn+F4) |
 
 Kernel integration: copy both DTS files to `arch/arm64/boot/dts/qcom/`, add
 `dtb-$(CONFIG_ARCH_QCOM) += x1p42100-asus-proart-pz13.dtb` to the `Makefile`, and the
 compatible `asus,proart-pz13-ht5306qa` to `Documentation/devicetree/bindings/arm/qcom.yaml`.
-Apply `patches/*.patch` (`git am`) and set `CONFIG_VIDEO_HM1092=m` (IR camera) and
-`CONFIG_EC_ASUS_PROART_PZ13=m` (fan).
+Apply `patches/*.patch` (`git am`) and set `CONFIG_VIDEO_HM1092=m` (IR camera),
+`CONFIG_EC_ASUS_PROART_PZ13=m` (fan) and `CONFIG_LEDS_USER=m` (keyboard backlight LED;
+already set in the config used here).
 
 Schema check (dt-schema 2026.9, jglathe 7.2.5 tree): `make CHECK_DTBS=y W=1
 qcom/x1p42100-asus-proart-pz13.dtb` reports nothing from our two files and no dtc warnings;
@@ -45,7 +46,7 @@ appear identically on `x1e80100-crd.dtb`.
 | WLAN WCN7850 (pcie4, ath12k) | works (NetworkManager); ath12k uses the generic board file, the ASUS variant is missing from linux-firmware |
 | Bluetooth (uart14) | works: the ASUS Pen pairs and connects (BLE), its battery service shows up in BlueZ and UPower |
 | USB-C ×2 (usb_1_ss0/ss1) incl. ps883x retimers | works (stick, LAN adapter, charger, SuperSpeed on both ports); DisplayPort alt mode works on both ports (passive USB-C→DP adapter, picture on the monitor; `tools/pz13-dpdiag.sh` shows the ADSP reporting the mode, the PHY switching to DP and `msm_dp_ctrl_setup_tr_unit` after link training); DisplayPort audio: works on both ports with automatic switching and clean plug/unplug cycles, opt-in via `install/ucm-dp-audio.conf`, `install/wireplumber-20-dp-audio.conf` and the topology in `audio/`; one quirk: the DSP refuses the first start of port 0 after a boot, the first use needs the output switched to the speakers and back once (`notes/dp-audio-hotplug.md`) |
-| Keyboard cover (usb_mp, 0b05:1b6e) | keyboard, Caps LED, touchpad, mute/volume, display switch work natively; Fn+F4–F12 and the backlight via the userspace daemon `install/pz13-fnkeys.py`; Fn lock not available (see below) |
+| Keyboard cover (usb_mp, 0b05:1b6e) | keyboard, Caps LED, touchpad, mute/volume, display switch work natively; Fn+F4–F12 via the userspace daemon `install/pz13-fnkeys.py`, which also exposes the backlight as a LED class device (uleds, `patches/0015`) so that GNOME follows it (Fn+F4 cycles the four levels with the indicator, level slider, off with the screen); Fn lock not available (see below) |
 | Touchscreen + pen (ELAN 04F3:430A, i2c8 @0x10, IRQ tlmm 51) | works, incl. stylus collection. The controller's stylus battery report is bogus (constant 1 % with the pen in range, also after hours of charging), so `patches/0008` ignores it like the Surface Pro 12's ELAN controller. The pen's real charge level comes over Bluetooth once the pen is paired (BLE battery service, shown by UPower and GNOME) |
 | EC HID (0B05:4543, i2c0 @0x17, IRQ tlmm 67) | bound (hidraw), hotkey events not decoded yet |
 | Lid sensor (tlmm 92) | works: closing the cover over the screen gives logind "Lid closed"/"Lid opened" and suspends the tablet per GNOME's lid policy |
@@ -154,15 +155,30 @@ capture of the vendor feature reports:
 - ROG function mask (`5a 05 20 31 00 08` → byte 6 = `0x01`): backlight only. No Fn lock,
   no RGB/profiles, no backlight timeout command.
 - Backlight: handshake "ASUS Tech.Inc." then `5a ba c5 c4 <0..3>` on report 0x5a, four
-  levels. `install/kbdlight.py` → `/usr/local/bin/kbdlight`; the Fn daemon sends the last
-  level set with Fn+F4 (kept in `/run`, so 1 after a boot) whenever it opens the cover
-  (boot, reattach, resume).
+  levels. `install/kbdlight.py` → `/usr/local/bin/kbdlight` sends one level by hand. The
+  Fn daemon creates the LED class device `asus::kbd_backlight` (max 3) through the kernel's
+  userspace LED driver `uleds` and forwards every brightness write to the cover; it starts
+  at level 1 and re-sends the current level whenever it opens the cover (boot, reattach,
+  resume). UPower 1.90 takes the first LED under `/sys/class/leds` whose name contains
+  `kbd_backlight` (scanned once at its start, hence `Before=upower.service` in the unit),
+  so gnome-settings-daemon owns the level from then on: the quick-settings slider sets it,
+  the idle handling dims it, switches it off with the screen and restores it on activity.
+  Fn+F4 cycles 0 → 1 → 2 → 3 → 0 as on Windows: the daemon sends the new level to the
+  cover and reports it through the uleds descriptor as a hardware change, which
+  `patches/0015` adds to uleds (`brightness_hw_changed`, the mechanism a ThinkPad's
+  single backlight key uses); UPower passes that on as an "internal" change, GNOME shows
+  the indicator and updates its state. hid-asus's own mapping of code 0xc7,
+  `KEY_KBDILLUMTOGGLE`, gives only off/on under GNOME (tried, kernel -18). The cover has no
+  backlight timeout of its own.
+  hid-asus cannot provide the LED on the PZ13: the vendor page shares the USB interface
+  with the touchpad (hid-multitouch), and in current kernels the LED is created by asus-wmi
+  (x86 ACPI WMI), hid-asus only forwards to it, so on arm64 there is nothing to bind to.
 - Fn layer (press `5a <code> 01`, release `5a 00 00`, repeats while held):
 
   | Key | Code | Function | Linux |
   |-----|------|----------|-------|
   | Fn+F1/F2/F3 | consumer 0xe2/0xea/0xe9 | mute / vol − / vol + | native |
-  | Fn+F4 | 0xc7 | keyboard backlight cycle | daemon → `kbdlight` |
+  | Fn+F4 | 0xc7 | keyboard backlight cycle | daemon: next level to the cover, reported via the LED's `brightness_hw_changed` |
   | Fn+F5 / F6 | 0x10 / 0x20 | brightness − / + | `KEY_BRIGHTNESSDOWN/UP` |
   | Fn+F7 | – | display switch, sent as Super+P on the keyboard interface | native |
   | Fn+F8 | 0x7e | emoji | `KEY_EMOJI_PICKER` |
@@ -203,8 +219,10 @@ capture of the vendor feature reports:
   to `/usr/share/alsa/ucm2/Qualcomm/x1e80100/` plus the DMI entry in `x1e80100.conf`
   (trixie's alsa-ucm-conf does not know the device). `alsa-utils` for testing.
 - Keyboard cover: `install/kbdlight.py` → `/usr/local/bin/kbdlight`, `install/pz13-fnkeys.py` → `/usr/local/bin/pz13-fnkeys` plus
-  `install/pz13-fnkeys.service` → `/etc/systemd/system/` (needs `python3-evdev`;
-  `systemctl enable --now pz13-fnkeys`).
+  `install/pz13-fnkeys.service` → `/etc/systemd/system/` (needs `python3-evdev` and the
+  `uleds` module, which the daemon loads itself; `systemctl enable` it and reboot: UPower
+  looks for the keyboard backlight LED only when it starts, and gnome-settings-daemon asks
+  UPower for it only at login).
 - Lock screen and suspend (GNOME 48): without `install/pz13-sleep-lock@asus-proart-pz13`,
   suspend starts only 5 s after the request and after resume the screen goes dark again
   about 1.3 s after it came on, until touched. Cause (gnome-settings-daemon debug logs,
@@ -227,8 +245,9 @@ capture of the vendor feature reports:
   in the foreground: logind reports the resume to the desktop only after all hooks
   returned (`install/pz13-cover-usb-resume` defers its wait into a transient unit).
 - Cover after the keyboard's firmware reset: `install/pz13-cover-usb-resume` to
-  `/usr/lib/systemd/system-sleep/` (mode 755); it sends the backlight feature report after
-  every resume, without which the cover emits no Fn-layer reports after its reset.
+  `/usr/lib/systemd/system-sleep/` (mode 755); it re-sends the LED's current level as the
+  backlight feature report after every resume, without which the cover emits no Fn-layer
+  reports after its reset.
 - Camera in desktop apps: Debian's WirePlumber 0.5.8 does not create a PipeWire node for
   libcamera cameras by default (only the raw CAMSS V4L2 nodes show up in `wpctl status`).
   Copy `install/wireplumber-10-libcamera.conf` to
@@ -288,8 +307,9 @@ capture of the vendor feature reports:
    alsa-ucm-conf; 4-channel capture (the topology currently allows 2); the DisplayPort
    port-0 first-start refusal (`notes/dp-audio-hotplug.md`) needs ADSP firmware knowledge.
 2. **Keyboard backlight / hotkeys in the kernel**: hid-asus has to coexist with the
-   multitouch interface; the vendor code table above is what such support needs. Userspace
-   daemon until then.
+   multitouch interface, and its backlight LED would have to move out of asus-wmi for a
+   non-x86 device; the vendor code table above is what such support needs. Userspace
+   daemon (uinput + uleds) until then.
 3. **DTS**: clarify `VREG_MISC_3P3` (Zenbook, purpose on the PZ13 unknown); add
    `RPMH_LN_BB_CLK2` for the WCN7850; map tlmm 149/150 (EC GPIOs).
 4. **Cameras**: front, IR and rear work (see "What works"). Open: the IR illuminator (PM8550 flash

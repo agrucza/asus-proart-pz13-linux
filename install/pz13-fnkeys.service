@@ -1,5 +1,7 @@
 [Unit]
-Description=ASUS ProArt PZ13 keyboard cover Fn keys (hidraw -> uinput)
+Description=ASUS ProArt PZ13 keyboard cover Fn keys (hidraw -> uinput) and backlight LED
+# UPower looks for the keyboard backlight LED only once, at its start
+Before=upower.service
 
 [Service]
 ExecStart=/usr/local/bin/pz13-fnkeys
