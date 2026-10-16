@@ -33,7 +33,7 @@ The ACPI page bytes 0xC4, 0xC6 and 0xC9 are not I2C addresses (the EC answers on
 | 0xC4 | 0x4F | event (SCI) number, read and cleared by the firmware's event handler; the firmware's event table lists Fn hotkeys, lid, power events |
 | 0xC4 | 0x70.. | EC version string (reads as zeros here) |
 | 0xC6 | 0x00 | written by the firmware's "fan EC interface" (`QCOM0D05`, function 1) with a temperature; has no effect on the fan on this firmware |
-| 0xC6 | 0x0A, 0x0B | the EC's own temperature sensors, degrees Celsius (27 at idle, 45/52 under load) |
+| 0xC6 | 0x0A, 0x0B | the EC's own temperature sensors, degrees Celsius; they sit on the heat path, not on the die: 15 to 20 °C below the SoC under full load (62/65 at 88 °C, 72/74 after 7 minutes), within 1 °C of it as soon as the load stops, 30/32 at idle with the SoC at 37 |
 | 0xC6 | 0x10 | fan control/status: bit 7 fan enabled, bit 6 full speed (the ASUS WMI "CPU fan control" bit; 9457 rpm when set), bits 0 and 2 set by default (0x85) |
 | 0xC6 | 0x18, 0x19 | fan tachometer, low/high byte, rpm |
 | 0xC6 | 0x84 | flags; bit 0 "temperature valid", set by the firmware after a temperature push |
@@ -86,6 +86,13 @@ Measured on the device (fan speed after 15 to 45 s at the given value):
 |---|---|---|---|---|---|---|---|---|
 | rpm | 1089 | 1392 | 1563 | 1741 | 1970 | 2236 | 3400 | 4007 |
 
+Sampled every 5 s while cooling down after a load (the fan lags the reported value by a
+few seconds, so these read slightly high):
+
+| reported °C | 43 | 45 | 47 | 49 | 51 | 53 | 55 | 57 | 60 | 62 | 64 | 67 |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| rpm | 2236 | 2331 | 2467 | 2597 | 2767 | 2871 | 2933 | 3049 | 3272 | 3369 | 3517 | 3673 |
+
 The speed follows the reported temperature continuously, the EC keeps a value until the next
 one is written, and the fan stops only when 0 is reported ("no reading"). Without any report
 the fan never starts: with the stock kernel the SoC reached 72 °C under load with the fan
@@ -95,11 +102,28 @@ Things that do not drive the fan: fan-page register 0x00 (the firmware's `QCOM0D
 1 writes it, the EC ignores it, refreshed or not), the flag in 0x84 on its own, the ACPI fan
 trip-point requests (the firmware's handler for them has no EC access).
 
+Under a sustained CPU+GPU load the SoC settled at 93 °C with the EC answering a reported
+90 °C with 4578 rpm (2026-10-16); the curve continues flat above that (85 → 4007, 90 →
+4578 rpm), while bit 6 of register 0x10 (full speed) gives 9600 to 9800 rpm. The SoC's
+thermal zones carry no passive trip point, only the critical one at 115 °C, so nothing else
+limits the temperature.
+
 The driver reports the hottest of the thermal zones listed in its `asus,thermal-zones`
-property (the eight CPU core "top" sensors and the four GPU sensors) once a second, writes
-only when the degree value changes, reports 0 on suspend and the real temperature again on
-resume. hwmon `pz13_ec`: `fan1_input`, `temp1_input`/`temp2_input` (EC sensors),
-`temp3_input` (`soc_reported`, the last value written to the EC).
+property (the eight CPU core "top" sensors, the eight "btm" sensors, which read up to 4 °C
+higher, and the four GPU sensors) once a second, writes only when the degree value changes,
+reports 0 on suspend and the real temperature again on resume. From a reported 85 °C on it
+sets the full-speed bit and clears it again once the reading is below 75 °C (measured:
+4107 rpm at 84 °C, 9626 rpm in the next sample after 85 °C was reported, held through
+readings between 81 and 91 °C); the bit is cleared for suspend, and a freshly probed driver
+adopts the bit's state so that a reload does not leave it set. Full speed buys little at
+the top end: with `stress-ng --cpu 8` plus glmark2 the SoC settles at 89 to 92 °C
+(hottest `btm` sensor) at 9700 rpm against 93 °C at 4600 rpm on the curve; full speed
+starts about 50 s after the load, the EC's own sensors reach 73/75 °C after 6 minutes
+(2026-10-16, charger plugged, battery full: the charger does not cover this load, the
+battery supplies 5.5 W on top, 12 to 18 W when half full), and the fan drops back to the
+curve within 5 s of the load ending. hwmon `pz13_ec`:
+`fan1_input`, `temp1_input`/`temp2_input` (EC sensors), `temp3_input` (`soc_reported`, the
+last value written to the EC).
 
 ## Not done
 

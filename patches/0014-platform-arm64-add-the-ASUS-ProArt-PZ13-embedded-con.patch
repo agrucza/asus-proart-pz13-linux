@@ -1,4 +1,4 @@
-From 370d0dc4c62ed113ee98a230b98be12047572ef3 Mon Sep 17 00:00:00 2001
+From 98321b46708a836685085b9a70a2ab2679b02675 Mon Sep 17 00:00:00 2001
 From: agrucza <a.grucza@gmx.net>
 Date: Sun, 11 Oct 2026 09:10:01 +0200
 Subject: [PATCH] platform: arm64: add the ASUS ProArt PZ13 embedded controller
@@ -16,13 +16,22 @@ once a second, and provide the fan speed, the EC's two temperature sensors
 and the reported temperature via hwmon. A floor temperature below the EC's
 curve is reported on suspend so the fan does not run through it.
 
+The EC's curve is tame: about 4100 rpm at a reported 84 degrees, 4600 at
+90, while the fan does 9700 with the EC's full-speed bit (the "CPU fan
+control" switch of the ASUS WMI interface), and the SoC's thermal zones
+carry no passive trip. So set that bit once the reported temperature
+reaches 85 degrees and clear it again below 75 (measured: 9626 rpm the
+moment 85 was reported, back on the curve after the load), clear it for
+suspend, and adopt its state at probe so that a driver reload does not
+leave it set forever.
+
 Signed-off-by: agrucza <a.grucza@gmx.net>
 ---
  .../asus,proart-pz13-ec.yaml                  |  64 +++
  drivers/platform/arm64/Kconfig                |  13 +
  drivers/platform/arm64/Makefile               |   1 +
- drivers/platform/arm64/asus-proart-pz13-ec.c  | 440 ++++++++++++++++++
- 4 files changed, 518 insertions(+)
+ drivers/platform/arm64/asus-proart-pz13-ec.c  | 482 ++++++++++++++++++
+ 4 files changed, 560 insertions(+)
  create mode 100644 Documentation/devicetree/bindings/embedded-controller/asus,proart-pz13-ec.yaml
  create mode 100644 drivers/platform/arm64/asus-proart-pz13-ec.c
 
@@ -134,10 +143,10 @@ index affb7c14de37..c24278deeb59 100644
  obj-$(CONFIG_EC_LENOVO_YOGA_C630) += lenovo-yoga-c630.o
 diff --git a/drivers/platform/arm64/asus-proart-pz13-ec.c b/drivers/platform/arm64/asus-proart-pz13-ec.c
 new file mode 100644
-index 000000000000..4d12b68d688f
+index 000000000000..64bd0752731b
 --- /dev/null
 +++ b/drivers/platform/arm64/asus-proart-pz13-ec.c
-@@ -0,0 +1,440 @@
+@@ -0,0 +1,482 @@
 +// SPDX-License-Identifier: GPL-2.0-only
 +/*
 + * ASUS ProArt PZ13 embedded controller
@@ -157,8 +166,12 @@ index 000000000000..4d12b68d688f
 + * driver does the same: once a second it reads the thermal zones listed in
 + * the device tree and reports the hottest one to the EC, which runs the fan
 + * at a speed following that temperature (as on the original OS, the fan
-+ * does not stop while the system is running). The fan speed, the EC's two
-+ * sensors and the reported temperature are exposed via hwmon.
++ * does not stop while the system is running). The EC's curve is tame (about
++ * 4500 rpm at 90 degrees, the fan does 9500), and the SoC's thermal zones
++ * carry no passive trip, so above a threshold the driver sets the EC's
++ * full-speed bit (the "CPU fan control" switch of the ASUS WMI interface)
++ * and clears it again with hysteresis. The fan speed, the EC's two sensors
++ * and the reported temperature are exposed via hwmon.
 + *
 + * Copyright (c) 2026 Alex Grucza
 + */
@@ -192,6 +205,7 @@ index 000000000000..4d12b68d688f
 +#define PZ13_EC_FAN_TEMP1	0x0a	/* EC sensor, degrees Celsius */
 +#define PZ13_EC_FAN_TEMP2	0x0b
 +#define PZ13_EC_FAN_CTRL	0x10	/* bit 7: fan running */
++#define PZ13_EC_FAN_CTRL_FULL	BIT(6)	/* full speed regardless of the curve */
 +#define PZ13_EC_FAN_RPM_LSB	0x18
 +#define PZ13_EC_FAN_RPM_MSB	0x19
 +#define PZ13_EC_FAN_FLAGS	0x84
@@ -210,6 +224,10 @@ index 000000000000..4d12b68d688f
 +#define PZ13_EC_FLOOR_TEMP	25
 +#define PZ13_EC_MAX_TEMP	127
 +
++/* Full speed from this temperature on, back to the curve below the other */
++#define PZ13_EC_FULL_ON_TEMP	85
++#define PZ13_EC_FULL_OFF_TEMP	75
++
 +struct pz13_ec_zone {
 +	const char *name;
 +	struct thermal_zone_device *tzd;
@@ -222,6 +240,7 @@ index 000000000000..4d12b68d688f
 +	struct pz13_ec_zone *zones;
 +	int num_zones;
 +	int reported;		/* degrees Celsius last written to the EC */
++	bool full_speed;	/* the full-speed bit is set */
 +};
 +
 +static int pz13_ec_select(struct pz13_ec *ec, u8 page, u8 reg)
@@ -334,6 +353,24 @@ index 000000000000..4d12b68d688f
 +	return 0;
 +}
 +
++static int pz13_ec_set_full_speed(struct pz13_ec *ec, bool on)
++{
++	u8 ctrl, want;
++	int ret;
++
++	ret = pz13_ec_read(ec, PZ13_EC_PAGE_FAN, PZ13_EC_FAN_CTRL, &ctrl);
++	if (ret)
++		return ret;
++	want = on ? ctrl | PZ13_EC_FAN_CTRL_FULL : ctrl & ~PZ13_EC_FAN_CTRL_FULL;
++	if (want != ctrl) {
++		ret = pz13_ec_write(ec, PZ13_EC_PAGE_FAN, PZ13_EC_FAN_CTRL, want);
++		if (ret)
++			return ret;
++	}
++	ec->full_speed = on;
++	return 0;
++}
++
 +/* The hottest of the zones, in degrees Celsius; the floor when none can be read */
 +static int pz13_ec_soc_temp(struct pz13_ec *ec)
 +{
@@ -374,6 +411,14 @@ index 000000000000..4d12b68d688f
 +		if (ret)
 +			dev_warn_ratelimited(&ec->client->dev,
 +					     "cannot report the temperature: %d\n", ret);
++	}
++
++	if (ec->full_speed ? temp < PZ13_EC_FULL_OFF_TEMP : temp >= PZ13_EC_FULL_ON_TEMP) {
++		int ret = pz13_ec_set_full_speed(ec, !ec->full_speed);
++
++		if (ret)
++			dev_warn_ratelimited(&ec->client->dev,
++					     "cannot switch full speed: %d\n", ret);
 +	}
 +
 +	schedule_delayed_work(&ec->work, msecs_to_jiffies(PZ13_EC_POLL_MS));
@@ -523,6 +568,8 @@ index 000000000000..4d12b68d688f
 +	ret = pz13_ec_read(ec, PZ13_EC_PAGE_FAN, PZ13_EC_FAN_CTRL, &val);
 +	if (ret)
 +		return dev_err_probe(dev, ret, "EC does not answer\n");
++	/* Left over from an earlier instance; the poll clears it with hysteresis */
++	ec->full_speed = val & PZ13_EC_FAN_CTRL_FULL;
 +
 +	ret = pz13_ec_report_temp(ec, PZ13_EC_FLOOR_TEMP);
 +	if (ret)
@@ -544,9 +591,13 @@ index 000000000000..4d12b68d688f
 +static int pz13_ec_suspend(struct device *dev)
 +{
 +	struct pz13_ec *ec = dev_get_drvdata(dev);
++	int ret;
 +
 +	cancel_delayed_work_sync(&ec->work);
 +	/* The fan must not run through suspend */
++	ret = pz13_ec_set_full_speed(ec, false);
++	if (ret)
++		return ret;
 +	return pz13_ec_report_temp(ec, PZ13_EC_NO_TEMP);
 +}
 +

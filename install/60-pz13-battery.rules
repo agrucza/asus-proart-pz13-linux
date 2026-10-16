@@ -1,0 +1,4 @@
+# Log every visible change of the battery or charger state (status, percentage,
+# charger plugged) to /var/log/pz13-battery.csv; the periodic lines come from
+# pz13-battery-log.timer.
+SUBSYSTEM=="power_supply", ACTION=="change", RUN+="/usr/local/bin/pz13-battery-log change"

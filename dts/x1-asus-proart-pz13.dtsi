@@ -1307,7 +1307,9 @@
 		reg = <0x5b>;
 		/* The SoC sensors whose hottest reading the EC runs the fan on */
 		asus,thermal-zones = <&cpu0_0_top>, <&cpu0_1_top>, <&cpu0_2_top>, <&cpu0_3_top>,
+				     <&cpu0_0_btm>, <&cpu0_1_btm>, <&cpu0_2_btm>, <&cpu0_3_btm>,
 				     <&cpu1_0_top>, <&cpu1_1_top>, <&cpu1_2_top>, <&cpu1_3_top>,
+				     <&cpu1_0_btm>, <&cpu1_1_btm>, <&cpu1_2_btm>, <&cpu1_3_btm>,
 				     <&thermal_gpuss_0>, <&thermal_gpuss_1>,
 				     <&thermal_gpuss_2>, <&thermal_gpuss_3>;
 	};
@@ -2014,3 +2016,11 @@ cpu1_0_top: &{/thermal-zones/cpu1-0-top-thermal} {};
 cpu1_1_top: &{/thermal-zones/cpu1-1-top-thermal} {};
 cpu1_2_top: &{/thermal-zones/cpu1-2-top-thermal} {};
 cpu1_3_top: &{/thermal-zones/cpu1-3-top-thermal} {};
+cpu0_0_btm: &{/thermal-zones/cpu0-0-btm-thermal} {};
+cpu0_1_btm: &{/thermal-zones/cpu0-1-btm-thermal} {};
+cpu0_2_btm: &{/thermal-zones/cpu0-2-btm-thermal} {};
+cpu0_3_btm: &{/thermal-zones/cpu0-3-btm-thermal} {};
+cpu1_0_btm: &{/thermal-zones/cpu1-0-btm-thermal} {};
+cpu1_1_btm: &{/thermal-zones/cpu1-1-btm-thermal} {};
+cpu1_2_btm: &{/thermal-zones/cpu1-2-btm-thermal} {};
+cpu1_3_btm: &{/thermal-zones/cpu1-3-btm-thermal} {};

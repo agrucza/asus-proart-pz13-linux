@@ -1,4 +1,4 @@
-From 156473647f53520b76c0b6e08b50f2ddb575093b Mon Sep 17 00:00:00 2001
+From b69d2d80c38e94cae5c8adbd2dc7055dac4eb117 Mon Sep 17 00:00:00 2001
 From: agrucza <a.grucza@gmx.net>
 Date: Mon, 12 Oct 2026 08:27:08 +0200
 Subject: [PATCH] leds: uleds: let userspace report brightness changes it made

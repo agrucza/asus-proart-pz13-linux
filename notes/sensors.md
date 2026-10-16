@@ -87,9 +87,23 @@ activation file so a D-Bus request for the name starts this daemon. iio-sensor-p
 installed and inactive. The bus policy that lets root own the name comes from the
 iio-sensor-proxy package (and from sl7-sensors).
 
-GNOME shows its auto-rotate quick-settings toggle only in tablet mode (cover detached);
-rotation itself does not depend on it. `pz13-sensor-proxy --debug` prints one line per
-second with the raw and mapped values and the orientation.
+GNOME rotates only with the cover detached: mutter manages the panel orientation only in
+"touch mode", and without a tablet-mode switch (the GPIO keys carry only the lid switch)
+touch mode means "touchscreen present and no pointer device"; the cover's touchpad is a
+pointer (`meta-seat-impl.c`, `update_touch_mode`). With the cover attached
+`org.gnome.Mutter.DisplayConfig PanelOrientationManaged` reads false while the daemon keeps
+reporting the orientation changes (observed 2026-10-16); the auto-rotate quick-settings
+toggle follows the same property. A uinput `SW_TABLET_MODE` switch would let GNOME rotate
+with the cover attached, but nothing on the device reports the cover's fold angle, so it
+would have to be toggled by hand (not done). `pz13-sensor-proxy --debug` prints one line
+per second with the raw and mapped values and the orientation.
+
+Side effect of the streaming: the ADSP toggles its SMP2P "handover" bit towards the
+remoteproc driver on every sensor sample, about three times a second, and the stock
+driver logged "qcom_q6v5_pas 6800000.remoteproc: Handover signaled, but it already
+happened" for each (13957 lines in 75 minutes). The same was found for the SLPI of a
+Samsung tablet (aaronsb/sm-x800-linux#46). Harmless; `patches/0016` (the upstream
+one-shot handover IRQ) disables the interrupt after the first handover.
 
 ## Not done
 

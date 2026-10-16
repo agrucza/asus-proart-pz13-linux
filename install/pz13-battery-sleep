@@ -1,0 +1,8 @@
+#!/bin/sh
+# systemd-sleep hook (/usr/lib/systemd/system-sleep/): log the battery state
+# right before suspend and right after resume, so that the drain in standby
+# shows up as its own pair of lines in /var/log/pz13-battery.csv.
+case $1 in
+pre|post) /usr/local/bin/pz13-battery-log "$1" ;;
+esac
+exit 0

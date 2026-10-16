@@ -1,0 +1,57 @@
+#!/bin/sh
+# Append one line with the battery's state to /var/log/pz13-battery.csv.
+# Run by pz13-battery-log.timer every five minutes, by the udev rule
+# 60-pz13-battery.rules on every power_supply change event (the firmware
+# notifies on every state update; those lines are written only when status,
+# percentage or charger differ from the last line) and by the sleep hook
+# pz13-battery-sleep before suspend and after resume. $1 is the note column:
+# "change", "pre", "post" or empty for the timer.
+# Values are the raw sysfs numbers (percentage derived from the energy values, energy in uWh, voltage in uV, power in uW,
+# temperature in tenths of a degree); tools/pz13-battery-report.py converts them.
+# "charger" is 1 while the battery charges from it or an attached USB-C partner powers us.
+LOG=${PZ13_BATTERY_LOG:-/var/log/pz13-battery.csv}
+PS=${PZ13_POWER_SUPPLY:-/sys/class/power_supply}
+NOTE=$1
+
+bat=
+online=0
+for d in "$PS"/*; do
+	[ -r "$d/type" ] || continue
+	case $(cat "$d/type") in
+	Battery) [ -z "$bat" ] && bat=$d ;;
+	Mains|USB) [ "$(cat "$d/online" 2>/dev/null)" = 1 ] && online=1 ;;
+	esac
+done
+[ -n "$bat" ] || exit 0
+
+# qcom_battmgr reports the charger as online only while it charges from it (the
+# firmware's "charging source" is empty with a full battery); a USB-C port with a
+# partner attached and the sink role tells that a power source is plugged in (an
+# empty port reports the sink role as well)
+for port in ${PZ13_TYPEC:-/sys/class/typec}/port*; do
+	case $port in *-partner) continue ;; esac
+	[ -d "$port-partner" ] || continue
+	case $(cat "$port/power_role" 2>/dev/null) in *"[sink]"*) online=1 ;; esac
+done
+
+rd() { cat "$bat/$1" 2>/dev/null || echo ""; }
+
+# qcom_battmgr reports no percentage; derive it from the energy values
+cap=$(rd capacity)
+if [ -z "$cap" ]; then
+	now=$(rd energy_now); full=$(rd energy_full)
+	[ -n "$now" ] && [ "${full:-0}" -gt 0 ] && cap=$(( (200 * now / full + 1) / 2 ))
+fi
+
+if [ ! -s "$LOG" ]; then
+	echo "time,status,capacity,energy_now,energy_full,energy_full_design,voltage_now,power_now,current_now,temp,cycle_count,health,charge_end,charger,note" >"$LOG"
+elif [ "$NOTE" = change ]; then
+	last=$(tail -n 1 "$LOG" | cut -d, -f2,3,14)
+	[ "$last" != "$(rd status),$cap,$online" ] || exit 0
+fi
+printf '%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s\n' \
+	"$(date +%Y-%m-%dT%H:%M:%S)" "$(rd status)" "$cap" \
+	"$(rd energy_now)" "$(rd energy_full)" "$(rd energy_full_design)" \
+	"$(rd voltage_now)" "$(rd power_now)" "$(rd current_now)" "$(rd temp)" \
+	"$(rd cycle_count)" "$(rd health)" "$(rd charge_control_end_threshold)" \
+	"$online" "$NOTE" >>"$LOG"

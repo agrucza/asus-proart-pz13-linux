@@ -23,7 +23,7 @@ logs on sda4 "PZ13") but is normally not plugged in.
   copied into `arch/arm64/boot/dts/qcom/`; `Makefile` and `Documentation/devicetree/bindings/arm/qcom.yaml`
   already carry the entry/compatible. The tree has local changes: PHY_INIT_COMPLETE_TIMEOUT
   100 ms in the three QMP PHY drivers (`phy-qcom-qmp-{pcie,usb,combo}.c`, harmless, can
-  stay), and fifteen commits on top of jglathe's branch (exported to `patches/` in this repo): the HM1092
+  stay), and sixteen commits on top of jglathe's branch (exported to `patches/` in this repo): the HM1092
   IR sensor driver + binding (v6 from linux-media, `b4 am
   20260801-hm1092-driver-v6-0-5979f223748a@gmail.com`), our CSIPHY combo-mode support
   (camss + phy-qcom-mipi-csi2), X1P42100 CAMSS support (Wenmeng Liu v3,
@@ -36,7 +36,11 @@ logs on sda4 "PZ13") but is normally not plugged in.
   (`patches/0013`, applied with `git am`, original author kept) and our EC driver for the fan
   (`patches/0014`, `drivers/platform/arm64/asus-proart-pz13-ec.c` + binding) and the uleds
   hardware-change reporting for the keyboard backlight (`patches/0015`, `drivers/leds/uleds.c`
-  + `Documentation/leds/uleds.rst`; `CONFIG_LEDS_USER=m` was already set);
+  + `Documentation/leds/uleds.rst`; `CONFIG_LEDS_USER=m` was already set) and the upstream
+  one-shot handover IRQ for qcom_q6v5 (`patches/0016`, Abel Vesa, `git am` + a hand-ported
+  hunk because this tree shares one init between prepare and attach; it stops the
+  "Handover signaled, but it already happened" flood, three lines a second from the ADSP's
+  sensor core);
   `CONFIG_VIDEO_HM1092=m` and `CONFIG_EC_ASUS_PROART_PZ13=m` in `.config`. Nothing else (no
   nocsr patch: it only masks the status check).
 - Single out-of-package module build (e.g. for hm1092): `make ARCH=arm64
@@ -45,7 +49,7 @@ logs on sda4 "PZ13") but is normally not plugged in.
   certs/signing_key.x509 drivers/media/i2c/hm1092.ko`. Without `LOCALVERSION=-pz13` the
   vermagic becomes `7.2.5+` and the installed kernel refuses the module. Module goes to
   `/lib/modules/7.2.5-pz13/kernel/drivers/media/i2c/` on the tablet + `depmod -a`.
-- Kernel packages: `~/src/linux-image-7.2.5-pz13_7.2.5-N_arm64.deb`; `-19` (patches through 0015) is the current one, `-18` has patches through 0014; -12 was a lockdep test build, -15 is deleted. Bump `N` on every build. Diagnostic DTS variants left in
+- Kernel packages: `~/src/linux-image-7.2.5-pz13_7.2.5-N_arm64.deb`; `-21` (patches through 0016) is the current one, `-20` has patches through 0015 with the fan's full-speed switch in 0014, `-19` the same without the switch; -12 was a lockdep test build, -15 is deleted. Bump `N` on every build. Diagnostic DTS variants left in
   the tree break `bindeb-pkg` once the dtsi moves on; remove probe variants right after use. When running a build in the background, do not wrap it in a subshell with
   a trailing `echo`: the task's exit code is then the echo's, not make's. Judge a package build
   by the log and the presence of the `.deb`.
@@ -132,7 +136,10 @@ Expected `18 / 2 / 0`.
   from `/boot/dtb/` and only seeds `/boot/dtb/` from the kernel package when it is empty (a
   hook that copies the package DTB unconditionally clobbers a hand-installed one). After any
   DTB build, copy the DTB to both `/boot/dtb/` and
-  `/boot/efi/pz13/` as before.
+  `/boot/efi/pz13/` as before. This also holds for a DTS change shipped in a kernel
+  package: `dpkg -i` leaves the old DTB in place (2026-10-16: -20 ran with the old zone
+  list until the package's DTB from `/usr/lib/linux-image-7.2.5-pz13/qcom/` was copied);
+  `cmp` the installed DTB against the package's to check.
 
 ## Where things stand
 
@@ -181,9 +188,13 @@ Open, in the order we intended to tackle them:
    QREF report, the mutter report in `notes/mutter-powersave-stall.md`, hid-asus) is
    deferred by the user.
 8. The fan: the EC runs it from a temperature the OS pushes through its command interface
-   (`notes/ec.md`); the driver polls the CPU/GPU zones once a second. Kernel-tree commits are
+   (`notes/ec.md`); the driver polls the CPU/GPU zones (top, btm, gpuss) once a second and
+   sets the EC's full-speed bit from a reported 85 °C until below 75 °C (verified
+   2026-10-16; the EC's own curve only gave 4600 rpm at 93 °C). Kernel-tree commits are
    local only and exist to generate `patches/`; the user has accepted that (asked why, then
-   "fold it into the commit and regenerate 0014").
+   "fold it into the commit and regenerate 0014"); folding is done with
+   `git commit --fixup=amend:<commit>` and `GIT_SEQUENCE_EDITOR=true git rebase -i
+   --autosquash --autostash <base>` (works non-interactively, base 4a0b49df1c46 for 0014).
 9. Sensors: the IMU is on the ADSP's sensor core (QMI service 400). The core needs the
    Windows `qcsensorsconfigcrd8380` tree served over FastRPC (sl7-sensors deb's adsprpcd,
    tree from `tools/pz13-sns-config.sh`, at `/var/lib/sl7-sensors/sns-config`);
@@ -202,6 +213,14 @@ Open, in the order we intended to tackle them:
    off/on only, tested on -18), UPower `SetBrightness` from the daemon (gsd ignores
    "external" changes, no indicator), `KEY_KBDILLUMUP` (gsd clamps at max, no wrap). A
    screen-state poll in the daemon (`bl_power`) worked but is unnecessary with the LED.
+12. Battery log (2026-10-16): `install/pz13-battery-log` + timer + udev rule + sleep hook
+   write `/var/log/pz13-battery.csv` on the tablet; `tools/pz13-battery-report.py` reads it.
+   qcom_battmgr exposes no `capacity`/`health`, the percentage is derived from the energy
+   values. First reading: energy_full 59.8 of 70.0 Wh design after 6 cycles.
+13. ADSP "Handover signaled, but it already happened" flood (2026-10-16): the ADSP's
+   sensor core toggles the SMP2P handover bit on every sensor sample (same finding as
+   aaronsb/sm-x800-linux#46 for the SLPI); upstream fix is `patches/0016`. Harmless apart
+   from the journal (13957 lines in 75 minutes before the patch).
 
 ## Conventions
 

@@ -1,0 +1,10 @@
+[Unit]
+Description=Log the battery state every five minutes
+
+[Timer]
+OnBootSec=30s
+OnUnitActiveSec=5min
+AccuracySec=5s
+
+[Install]
+WantedBy=timers.target

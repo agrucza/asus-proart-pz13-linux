@@ -1,0 +1,6 @@
+[Unit]
+Description=Log the battery state to /var/log/pz13-battery.csv
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/pz13-battery-log
